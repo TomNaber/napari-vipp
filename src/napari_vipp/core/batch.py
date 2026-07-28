@@ -36,7 +36,7 @@ from napari_vipp.core.atomic_io import (
 from napari_vipp.core.atomic_io import (
     atomic_write_text,
 )
-from napari_vipp.core.io import read_image
+from napari_vipp.core.io import MICROSCOPE_SUFFIXES, inspect_image_source, read_image
 from napari_vipp.core.operations import save_array_output
 from napari_vipp.core.pipeline import PrototypePipeline, SourcePayload
 from napari_vipp.core.source_identity import (
@@ -432,12 +432,31 @@ class _StagedBatchOutput:
 
 
 @dataclass(frozen=True)
+class _BatchSourceItem:
+    path: Path
+    series_index: int | None = None
+    series_name: str = ""
+
+
+@dataclass(frozen=True)
 class BatchItemPlan:
     index: int
     batch_id: str
     primary_source: Path
     source_paths: dict[str, Path]
     outputs: tuple[BatchOutputPlan, ...]
+    source_series_indices: dict[str, int] = field(default_factory=dict)
+    source_series_names: dict[str, str] = field(default_factory=dict)
+
+    def source_label(self, node_id: str) -> str:
+        path = self.source_paths[node_id]
+        series_index = self.source_series_indices.get(node_id)
+        if series_index is None:
+            return path.name
+        series_name = self.source_series_names.get(node_id) or (
+            f"Series {series_index + 1}"
+        )
+        return f"{path.name} › {series_name}"
 
 
 @dataclass(frozen=True)
@@ -908,7 +927,7 @@ def _best_effort_unlink(path: Path) -> None:
 
 def build_batch_plan(config: BatchConfig) -> BatchPlan:
     """Resolve source pairing and every output path without loading image data."""
-    source_lists: dict[str, list[Path]] = {}
+    source_lists: dict[str, list[_BatchSourceItem]] = {}
     counts: dict[str, int] = {}
     for source in config.sources:
         input_dir = config.resolve_path(source.input_dir)
@@ -920,13 +939,14 @@ def build_batch_plan(config: BatchConfig) -> BatchPlan:
                 f"No files matched '{source.pattern}' for "
                 f"batch source '{source.title}'."
             )
-        source_lists[source.node_id] = paths
-        counts[source.title] = len(paths)
+        items = _expand_source_items(paths)
+        source_lists[source.node_id] = items
+        counts[source.title] = len(items)
     expected = len(next(iter(source_lists.values())))
     if any(len(paths) != expected for paths in source_lists.values()):
         summary = ", ".join(f"{title}={count}" for title, count in counts.items())
         raise ValueError(
-            "Bound batch sources must contain the same number of matched files "
+            "Bound batch sources must contain the same number of image items "
             f"so they can be paired by sorted order ({summary})."
         )
 
@@ -934,13 +954,34 @@ def build_batch_plan(config: BatchConfig) -> BatchPlan:
     primary_id = config.sources[0].node_id
     items: list[BatchItemPlan] = []
     for item_index in range(expected):
-        source_paths = {
+        source_items = {
             source.node_id: source_lists[source.node_id][item_index]
             for source in config.sources
         }
+        source_paths = {
+            node_id: source_item.path
+            for node_id, source_item in source_items.items()
+        }
+        source_series_indices = {
+            node_id: source_item.series_index
+            for node_id, source_item in source_items.items()
+            if source_item.series_index is not None
+        }
+        source_series_names = {
+            node_id: source_item.series_name
+            for node_id, source_item in source_items.items()
+            if source_item.series_index is not None
+        }
         primary_source = source_paths[primary_id]
+        primary_item = source_items[primary_id]
+        primary_source_stem = _batch_source_item_stem(primary_item)
+        primary_source_name = (
+            primary_source.name
+            if primary_item.series_index is None
+            else primary_source_stem
+        )
         batch_id = safe_batch_filename(
-            f"{item_index + 1:04d}_{batch_source_stem(primary_source)}"
+            f"{item_index + 1:04d}_{primary_source_stem}"
         )
         outputs = tuple(
             _plan_output(
@@ -949,7 +990,8 @@ def build_batch_plan(config: BatchConfig) -> BatchPlan:
                 output,
                 item_index + 1,
                 batch_id,
-                primary_source,
+                primary_source_stem,
+                primary_source_name,
             )
             for output in config.outputs
         )
@@ -960,6 +1002,8 @@ def build_batch_plan(config: BatchConfig) -> BatchPlan:
                 primary_source=primary_source,
                 source_paths=source_paths,
                 outputs=outputs,
+                source_series_indices=source_series_indices,
+                source_series_names=source_series_names,
             )
         )
 
@@ -1510,9 +1554,9 @@ def _plan_output(
     output: BatchOutputConfig,
     index: int,
     batch_id: str,
-    primary_source: Path,
+    source_stem: str,
+    source_name: str,
 ) -> BatchOutputPlan:
-    source_stem = batch_source_stem(primary_source)
     values = {
         "source_stem": source_stem,
         "tag": safe_batch_filename(output.tag),
@@ -1520,7 +1564,7 @@ def _plan_output(
         "node_title": safe_batch_filename(output.node_title),
         "batch_id": batch_id,
         "batch_index": f"{index:04d}",
-        "source_name": safe_batch_filename(primary_source.name),
+        "source_name": safe_batch_filename(source_name),
         "primary_source_stem": source_stem,
     }
     filename = format_batch_filename(output.filename_template, values)
@@ -1766,7 +1810,10 @@ def _source_payloads_for_item(
             role = "collection"
         dataset = read_image(
             path,
-            series_index=int(node.params.get("series_index", 0)),
+            series_index=item.source_series_indices.get(
+                node_id,
+                int(node.params.get("series_index", 0)),
+            ),
         )
         provenance = _json_safe(dataset.provenance)
         payloads[node_id] = SourcePayload(
@@ -1947,7 +1994,12 @@ def _seed_manifest(
     items = []
     for item in plan.items:
         sources = tuple(
-            _planned_source_record(node_id, path)
+            _planned_source_record(
+                node_id,
+                path,
+                series_index=item.source_series_indices.get(node_id),
+                series_name=item.source_series_names.get(node_id, ""),
+            )
             for node_id, path in item.source_paths.items()
         )
         sources += tuple(
@@ -1989,6 +2041,8 @@ def _planned_source_record(
     path: Path,
     *,
     role: str = "collection",
+    series_index: int | None = None,
+    series_name: str = "",
 ) -> dict[str, object]:
     record: dict[str, object] = {
         "node_id": node_id,
@@ -1998,6 +2052,11 @@ def _planned_source_record(
     identity = _path_identity(path)
     if identity:
         record["identity"] = identity
+    if series_index is not None:
+        record["series"] = {
+            "index": series_index,
+            "name": series_name or f"Series {series_index + 1}",
+        }
     return record
 
 
@@ -2101,6 +2160,48 @@ def _iter_source_paths(input_dir: Path, pattern: str) -> list[Path]:
             os.path.normcase(str(path.resolve(strict=False))),
         ),
     )
+
+
+def _expand_source_items(paths: list[Path]) -> list[_BatchSourceItem]:
+    items: list[_BatchSourceItem] = []
+    container_suffixes = {".npz", ".tif", ".tiff", ".zarr", *MICROSCOPE_SUFFIXES}
+    for path in paths:
+        if path.suffix.lower() not in container_suffixes:
+            items.append(_BatchSourceItem(path))
+            continue
+        try:
+            inspection = inspect_image_source(path)
+        except Exception as exc:
+            if path.suffix.lower() not in MICROSCOPE_SUFFIXES:
+                items.append(_BatchSourceItem(path))
+                continue
+            raise ValueError(
+                f"Could not inspect batch source collection {path}: {exc}"
+            ) from exc
+        if not inspection.series:
+            raise ValueError(f"Batch source collection contains no images: {path}")
+        if len(inspection.series) == 1:
+            items.append(_BatchSourceItem(path))
+            continue
+        items.extend(
+            _BatchSourceItem(
+                path,
+                series.index,
+                series.name or series.key or f"Series {series.index + 1}",
+            )
+            for series in inspection.series
+        )
+    return items
+
+
+def _batch_source_item_stem(item: _BatchSourceItem) -> str:
+    stem = batch_source_stem(item.path)
+    if item.series_index is None:
+        return stem
+    series_name = safe_batch_filename(
+        item.series_name or f"Series_{item.series_index + 1}"
+    )
+    return f"{stem}__{item.series_index + 1:04d}_{series_name}"
 
 
 def format_batch_filename(template: str, values: dict[str, str]) -> str:
