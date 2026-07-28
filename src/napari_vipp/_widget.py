@@ -9739,10 +9739,22 @@ class VippWidget(QWidget):
             and spec.name in {"channel_1_threshold", "channel_2_threshold"}
         ):
             return True
-        return (
-            node is not None
-            and node.operation_id == "set_pixel_size"
-            and spec.name in {"x_size", "y_size", "z_size"}
+        return node is not None and (
+            (
+                node.operation_id == "set_pixel_size"
+                and spec.name in {"x_size", "y_size", "z_size"}
+            )
+            or (
+                node.operation_id == "set_microscope_metadata"
+                and spec.name
+                in {
+                    "channel_1_wavelength_nm",
+                    "channel_2_wavelength_nm",
+                    "channel_3_wavelength_nm",
+                    "numerical_aperture",
+                    "refractive_index",
+                }
+            )
         )
 
     def _effective_parameter_spec(self, node_id: str, spec):
