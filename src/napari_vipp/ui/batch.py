@@ -147,7 +147,9 @@ class CollectionBatchDialog(QDialog):
         self.output_edit = QLineEdit()
         self.output_edit.installEventFilter(self)
         self.format_combo = QComboBox()
-        self.format_combo.addItems(["ome-tiff", "imagej-tiff", "tiff", "npy"])
+        self.format_combo.addItems(
+            ["ome-tiff", "imagej-tiff", "tiff", "npy", "ims"]
+        )
         self.existing_policy_combo = QComboBox()
         self.existing_policy_combo.addItem("Error", ExistingFilePolicy.ERROR.value)
         self.existing_policy_combo.addItem("Skip", ExistingFilePolicy.SKIP.value)
@@ -477,7 +479,7 @@ class CollectionBatchDialog(QDialog):
         else:
             self.input_edit = QLineEdit()
             self.pattern_edit = QLineEdit(
-                "*.tif;*.tiff;*.ome.tif;*.ome.tiff;*.lif"
+                "*.tif;*.tiff;*.ome.tif;*.ome.tiff;*.ims;*.lif"
             )
         self._refresh_suggested_output_path()
 

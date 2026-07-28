@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from napari_vipp.core.io.imaris import write_imaris
 from napari_vipp.core.io.microscope import (
     MICROSCOPE_SUFFIXES,
     inspect_microscope,
@@ -37,6 +38,7 @@ WRITE_FORMATS = (
     "imagej-tiff",
     "tiff",
     "npy",
+    "ims",
     "png",
     "jpeg",
     "bmp",
@@ -128,6 +130,8 @@ def write_image(
         )
     if selected == "npy":
         return write_numpy(data, output_path)
+    if selected == "ims":
+        return write_imaris(data, output_path, image_state=image_state)
     if selected in {"ome-tiff", "imagej-tiff", "tiff"}:
         return write_tiff(
             data,
@@ -148,6 +152,8 @@ def write_image(
 def _normalized_output_path(path: Path, format: str) -> Path:
     if format == "npy" and path.suffix.lower() != ".npy":
         return Path(f"{path}.npy")
+    if format == "ims" and path.suffix.lower() != ".ims":
+        return Path(f"{path}.ims")
     return path
 
 
@@ -174,6 +180,8 @@ def _resolve_write_format(
     lower_name = path.name.lower()
     if path.suffix.lower() == ".npy":
         return "npy"
+    if path.suffix.lower() == ".ims":
+        return "ims"
     if path.suffix.lower() == ".zarr":
         return "ome-zarr"
     if path.suffix.lower() in RASTER_SUFFIXES:

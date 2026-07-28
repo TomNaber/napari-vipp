@@ -1,0 +1,30 @@
+[build-system]
+requires = ["scikit-build-core>=0.10"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "napari-vipp-imaris"
+version = "0.1.0a1"
+description = "Optional native ImarisWriter companion for napari-vipp"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dependencies = ["numpy>=1.24"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Operating System :: MacOS :: MacOS X",
+]
+
+[project.urls]
+Repository = "https://github.com/rensutheart/napari-vipp"
+ImarisWriter = "https://github.com/imaris/ImarisWriter"
+
+[tool.scikit-build]
+cmake.version = ">=3.24"
+cmake.build-type = "Release"
+wheel.packages = ["src/napari_vipp_imaris"]
+wheel.py-api = "py3"
+sdist.include = ["vendor/ImarisWriter/**"]
+

@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 from tifffile import TiffFile, TiffWriter
 
+import napari_vipp.core.batch as batch_io
 import napari_vipp.core.io.microscope as microscope_io
 from napari_vipp.core.io import (
     AnalysisLabel,
@@ -507,6 +508,71 @@ def test_nd2_microscope_reader_normalizes_metadata(monkeypatch, tmp_path):
     assert loaded.image_state.acquisition.refractive_index == 1.515
     assert loaded.image_state.acquisition.deconvolution_applied is True
     assert loaded.image_state.acquisition.deconvolution_method == "Richardson-Lucy"
+
+
+def test_imaris_pyramid_is_one_highest_resolution_batch_source(
+    monkeypatch,
+    tmp_path,
+):
+    path = tmp_path / "stack.ims"
+    path.write_bytes(b"fake ims")
+
+    class FakeBioImage:
+        scenes = (
+            "stack.ims Resolution Level 3",
+            "stack.ims Resolution Level 1",
+            "stack.ims Resolution Level 2",
+        )
+        _data = {
+            scenes[0]: np.full((1, 2, 2, 4, 4), 3, dtype=np.uint16),
+            scenes[1]: np.full((1, 2, 8, 16, 16), 1, dtype=np.uint16),
+            scenes[2]: np.full((1, 2, 4, 8, 8), 2, dtype=np.uint16),
+        }
+        dims = SimpleNamespace(order="TCZYX")
+        physical_pixel_sizes = SimpleNamespace(Z=1.0, Y=0.25, X=0.25)
+        channel_names = ("DAPI", "FITC")
+        metadata = {}
+
+        def __init__(self, _path):
+            self.current_scene = self.scenes[0]
+
+        def set_scene(self, scene):
+            self.current_scene = (
+                self.scenes[int(scene)] if isinstance(scene, int) else scene
+            )
+
+        @property
+        def shape(self):
+            return self._data[self.current_scene].shape
+
+        @property
+        def dtype(self):
+            return self._data[self.current_scene].dtype
+
+        @property
+        def dask_data(self):
+            return self._data[self.current_scene]
+
+    monkeypatch.setattr(
+        microscope_io,
+        "_optional_bioio",
+        lambda _suffix: SimpleNamespace(BioImage=FakeBioImage),
+    )
+
+    inspection = inspect_image_source(path)
+    loaded = read_image(path)
+    batch_items = batch_io._expand_source_items([path])
+
+    assert len(inspection.series) == 1
+    assert inspection.series[0].index == 0
+    assert inspection.series[0].key.endswith("Resolution Level 1")
+    assert inspection.series[0].name == "stack.ims"
+    assert inspection.series[0].shape == (1, 2, 8, 16, 16)
+    assert loaded.selected_series == inspection.series[0]
+    assert loaded.data.shape == inspection.series[0].shape
+    assert np.all(loaded.data == 1)
+    assert len(batch_items) == 1
+    assert batch_items[0].series_index is None
 
 
 @pytest.mark.parametrize(

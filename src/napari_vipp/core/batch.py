@@ -66,6 +66,7 @@ _KNOWN_SUFFIXES = (
     ".tif",
     ".tiff",
     ".npy",
+    ".ims",
     ".csv",
     ".tsv",
 )
@@ -74,6 +75,7 @@ _IMAGE_SUFFIXES = {
     "imagej-tiff": ".tif",
     "tiff": ".tif",
     "npy": ".npy",
+    "ims": ".ims",
 }
 _IMAGE_FORMATS = frozenset(_IMAGE_SUFFIXES)
 _TABLE_FORMATS = frozenset(("csv", "tsv"))
@@ -1629,6 +1631,8 @@ def _filename_suffix_matches_format(filename: str, output_format: str) -> bool:
         )
     if output_format == "npy":
         return lower.endswith(".npy")
+    if output_format == "ims":
+        return lower.endswith(".ims")
     if output_format == "csv":
         return lower.endswith(".csv")
     if output_format == "tsv":
@@ -2124,6 +2128,7 @@ def _runtime_versions() -> dict[str, object]:
         "napari",
         "bioio",
         "bioio-bioformats",
+        "napari-vipp-imaris",
         "bioio-czi",
         "bioio-lif",
     )

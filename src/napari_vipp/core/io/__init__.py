@@ -1,5 +1,6 @@
 """Shared headless image import and export API."""
 
+from napari_vipp.core.io.imaris import OptionalImarisWriterError
 from napari_vipp.core.io.microscope import (
     MICROSCOPE_FILE_FILTER,
     MICROSCOPE_SUFFIXES,
@@ -28,6 +29,7 @@ __all__ = [
     "MICROSCOPE_FILE_FILTER",
     "MICROSCOPE_SUFFIXES",
     "OptionalMicroscopeReaderError",
+    "OptionalImarisWriterError",
     "SourceInspection",
     "detect_deconvolution_metadata",
     "inspect_image_source",

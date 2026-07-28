@@ -1,6 +1,6 @@
 # Image Import And Export
 
-Last reviewed: 2026-07-08
+Last reviewed: 2026-07-28
 
 VIPP uses one headless I/O layer for interactive sources, quick saves, Save
 Image nodes, and exported Python scripts. The explicit format choice matters:
@@ -35,6 +35,7 @@ reader, then reopen the file.
 | Nikon ND2 | `.nd2` | `pip install "napari-vipp[nd2]"` |
 | Broad microscope reader set | `.czi`, `.nd2`, `.lif`, `.lof`, `.xlif`, `.oir`, `.oib`, `.oif`, `.vsi` | `pip install "napari-vipp[microscope]"` |
 | BioIO/Bio-Formats fallback | `.ims` and Leica/Olympus/Bio-Formats-backed sources | `pip install "napari-vipp[bioformats]"` |
+| Imaris read and native write | `.ims` | `pip install "napari-vipp[ims]"` |
 
 Use the format-specific extra when you know what you need. Use
 `napari-vipp[microscope]` on a workstation intended to open mixed acquisition
@@ -43,6 +44,11 @@ formats.
 For multi-series TIFF or multi-image OME-Zarr, select the required item in
 `Series / image`. Time, channel, and Z remain axes inside that item. Use graph
 nodes such as Select Axis Slice to subset them reproducibly.
+
+Imaris resolution levels are treated as one logical image. VIPP loads only the
+level with the largest pixel volume (the highest resolution), so a batch runs
+the pipeline once per Z-stack rather than once per pyramid level. IMS export
+then creates a fresh resolution pyramid from the processed result.
 
 Ordinary raster formats are also available as export targets only for 2D
 intensity images and 2D RGB/RGBA images. Use OME-TIFF, ImageJ TIFF, TIFF,
@@ -74,11 +80,17 @@ the first Image Source node is used as the folder input for convenience.
 | OME-TIFF | A portable single processed image with OME-XML metadata is required. This is the default quick-save format. |
 | ImageJ TIFF | Direct ImageJ/Fiji hyperstack behavior is the priority. Binary masks are written as `uint8` values `0` and `255`. |
 | TIFF | Broad TIFF compatibility or preservation of 32-bit integer label IDs is required. |
+| Imaris IMS | A processed dataset should open directly in Imaris. Native export is optional and currently packaged for macOS arm64. It accepts `uint8`, `uint16`, `uint32`, and `float32` without implicit conversion. |
 | NPY | Exact array exchange is needed and scientific image metadata is not required. |
 | PNG/JPEG/BMP/GIF/WebP/TGA/PNM | A 2D display image is needed. PNG can preserve 16-bit grayscale values and label IDs up to 65535; JPEG/WebP/BMP/GIF/TGA-style outputs are 8-bit display exports. JPEG cannot store alpha. |
 
 ImageJ TIFF cannot safely represent 32-bit integer label IDs. Use conventional
 TIFF, OME-TIFF, or Export OME Analysis Dataset for those labels.
+
+IMS export creates a new image dataset with fresh resolution pyramids. It
+preserves representable TCZYX calibration, channel metadata, acquisition time,
+and VIPP provenance, but it does not copy Imaris Surpass objects, annotations,
+or the source file's original pyramid levels.
 
 ## Collection Batch Runs
 

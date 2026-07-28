@@ -77,6 +77,7 @@ _FORMAT_BY_SUFFIX = {
 }
 _NATIVE_INSTALL_COMMANDS = {
     ".czi": 'pip install "napari-vipp[czi]"',
+    ".ims": 'pip install "napari-vipp[ims]"',
     ".nd2": 'pip install "napari-vipp[nd2]"',
     ".lif": 'pip install "napari-vipp[microscope]"',
     ".lof": 'pip install "napari-vipp[microscope]"',
@@ -86,6 +87,10 @@ _NATIVE_INSTALL_COMMANDS = {
     ".xlif": 'pip install "napari-vipp[microscope]"',
 }
 _BIOIO_INSTALL_COMMAND = 'pip install "napari-vipp[bioformats]"'
+_IMARIS_RESOLUTION_SUFFIX = re.compile(
+    r"\s+Resolution Level\s+\d+\s*$",
+    re.IGNORECASE,
+)
 _DECONVOLUTION_TERMS = (
     "richardson-lucy",
     "richardson lucy",
@@ -492,12 +497,35 @@ def _inspect_bioio(path: Path, format_hint: str) -> SourceInspection:
         )
     if not series:
         raise ValueError(f"No image series found in {path}")
+    if path.suffix.lower() == ".ims":
+        series = list(_collapse_imaris_resolution_levels(series))
+        _bioio_set_scene(image, series[0].key)
     return SourceInspection(
         str(path),
         f"{format_hint}+bioio",
         tuple(series),
         _bioio_metadata(image),
     )
+
+
+def _collapse_imaris_resolution_levels(
+    series: list[ImageSeriesInfo],
+) -> tuple[ImageSeriesInfo, ...]:
+    groups: dict[tuple[str, str], tuple[str, list[ImageSeriesInfo]]] = {}
+    for item in series:
+        match = _IMARIS_RESOLUTION_SUFFIX.search(item.name)
+        if match is None:
+            groups[("scene", str(item.index))] = (item.name, [item])
+            continue
+        name = item.name[: match.start()].strip() or item.name
+        key = ("resolution", name.casefold())
+        groups.setdefault(key, (name, []))[1].append(item)
+
+    collapsed = []
+    for name, levels in groups.values():
+        highest = max(levels, key=lambda item: int(np.prod(item.shape)))
+        collapsed.append(replace(highest, index=len(collapsed), name=name))
+    return tuple(collapsed)
 
 
 def _read_bioio(path: Path, series_index: int, format_hint: str) -> ImageDataset:
@@ -1093,6 +1121,17 @@ def _channels_from_labels(labels) -> tuple[ChannelMetadata, ...]:
 def _acquisition_from_metadata(metadata: Any) -> AcquisitionMetadata:
     deconvolved, method = detect_deconvolution_metadata(metadata)
     return AcquisitionMetadata(
+        description=_first_text(metadata, ("description", "Description")),
+        acquisition_date=_first_text(
+            metadata,
+            (
+                "acquisitionDate",
+                "acquisition_date",
+                "AcquisitionDate",
+                "dateTime",
+                "timestamp",
+            ),
+        ),
         objective=_first_text(
             metadata,
             (
