@@ -492,7 +492,7 @@ class CollectionBatchDialog(QDialog):
         index: int,
     ) -> QWidget:
         folder_edit = QLineEdit()
-        pattern_edit = QLineEdit("*.tif;*.tiff;*.ome.tif;*.ome.tiff;*.lif")
+        pattern_edit = QLineEdit("*.tif;*.tiff;*.ome.tif;*.ome.tiff;*.ims;*.lif")
         browse_button = QPushButton("Folder...")
         browse_button.clicked.connect(
             lambda _checked=False, edit=folder_edit: self._browse_source_input(edit)

@@ -11167,6 +11167,7 @@ def test_collection_batch_dialog_defaults(qtbot):
     values = dialog.values()
 
     assert "*.ome.tif" in values["pattern"]
+    assert "*.ims" in values["pattern"]
     assert values["source_bindings"][0]["node_id"] == "input"
     assert "*.ome.tif" in values["source_bindings"][0]["pattern"]
     assert values["image_format"] == "ome-tiff"
