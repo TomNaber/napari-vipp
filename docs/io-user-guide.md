@@ -34,7 +34,7 @@ reader, then reopen the file.
 | Zeiss CZI | `.czi` | `pip install "napari-vipp[czi]"` |
 | Nikon ND2 | `.nd2` | `pip install "napari-vipp[nd2]"` |
 | Broad microscope reader set | `.czi`, `.nd2`, `.lif`, `.lof`, `.xlif`, `.oir`, `.oib`, `.oif`, `.vsi` | `pip install "napari-vipp[microscope]"` |
-| BioIO/Bio-Formats fallback | Leica/Olympus/Bio-Formats-backed sources | `pip install "napari-vipp[bioformats]"` |
+| BioIO/Bio-Formats fallback | `.ims` and Leica/Olympus/Bio-Formats-backed sources | `pip install "napari-vipp[bioformats]"` |
 
 Use the format-specific extra when you know what you need. Use
 `napari-vipp[microscope]` on a workstation intended to open mixed acquisition
