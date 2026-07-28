@@ -29,6 +29,7 @@ from napari_vipp.core.operations import (
     add_metadata_columns,
     analyze_skeleton,
     assign_channel_colors,
+    assign_channel_names,
     auto_watershed_from_mask,
     average_blur,
     bilateral_filter,
@@ -5274,6 +5275,55 @@ def test_assign_channel_colors_updates_carried_metadata():
 
     assert state.channels[0].color == 0xFFFF00
     assert state.channels[1].color == 0x00FFFF
+
+
+def test_assign_channel_names_passes_data_and_preserves_other_metadata():
+    data = np.arange(2 * 4 * 5, dtype=np.uint16).reshape(2, 4, 5)
+    channels = (
+        ChannelMetadata(
+            name="red",
+            color=0xFF0000,
+            fluor="mScarlet",
+            emission_wavelength=594.0,
+            emission_wavelength_unit="nanometer",
+        ),
+        ChannelMetadata(
+            name="green",
+            color=0x00FF00,
+            fluor="GFP",
+            excitation_wavelength=488.0,
+            excitation_wavelength_unit="nanometer",
+        ),
+    )
+    input_state = image_state_from_array(
+        data,
+        layer_metadata={"axes": "CYX"},
+        channels=channels,
+        acquisition=AcquisitionMetadata(
+            objective="Plan-Apochromat 63x",
+            objective_na=1.4,
+        ),
+    )
+
+    output = assign_channel_names(data, channel_names="ch1, CTBP2")
+    state = transform_image_state(
+        output,
+        input_state,
+        operation_id="assign_channel_names",
+        operation_title="Assign Channel Names",
+        params={"channel_names": "ch1, CTBP2"},
+    )
+
+    np.testing.assert_array_equal(output, data)
+    assert output.dtype == data.dtype
+    assert [channel.name for channel in state.channels] == ["ch1", "CTBP2"]
+    assert state.channels[0].color == channels[0].color
+    assert state.channels[0].fluor == channels[0].fluor
+    assert state.channels[0].emission_wavelength == 594.0
+    assert state.channels[1].color == channels[1].color
+    assert state.channels[1].fluor == channels[1].fluor
+    assert state.channels[1].excitation_wavelength == 488.0
+    assert state.acquisition == input_state.acquisition
 
 
 def test_combine_channels_colours_become_carried_metadata():

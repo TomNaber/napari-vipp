@@ -235,6 +235,48 @@ def test_explicit_volume_with_three_columns_is_not_treated_as_rgb():
         pipeline.run(data, input_metadata={"axes": "ZYX"})
 
 
+def test_assign_channel_names_requires_generic_explicit_channel_semantics():
+    data = np.zeros((8, 9, 3), dtype=np.uint16)
+    inferred, inferred_id = _pipeline_with("assign_channel_names")
+    inferred.set_param(inferred_id, "channel_names", "R,G,B")
+
+    with pytest.raises(AmbiguousAxisError, match="explicit channel axis"):
+        inferred.run(data)
+
+    encoded, encoded_id = _pipeline_with("assign_channel_names")
+    encoded.set_param(encoded_id, "channel_names", "R,G,B")
+    with pytest.raises(ValueError, match="encoded RGB/RGBA"):
+        encoded.run(
+            data,
+            input_metadata={
+                "axes": [
+                    {"name": "y", "type": "space"},
+                    {"name": "x", "type": "space"},
+                    {"name": "rgb", "type": "channel"},
+                ]
+            },
+        )
+
+
+def test_assign_channel_names_propagates_through_split_channels():
+    data = np.zeros((2, 4, 5), dtype=np.uint16)
+    pipeline, names_id = _pipeline_with("assign_channel_names")
+    pipeline.set_param(names_id, "channel_names", "ch1,CTBP2")
+    split = pipeline.add_node("split_channels")
+    assert pipeline.connect(names_id, split.id).success
+
+    pipeline.run(data, input_metadata={"axes": "CYX"})
+
+    assert [channel.name for channel in pipeline.output_states[names_id].channels] == [
+        "ch1",
+        "CTBP2",
+    ]
+    assert [state.channels[0].name for state in pipeline.node_output_states[split.id]] == [
+        "ch1",
+        "CTBP2",
+    ]
+
+
 def test_explicit_numeric_channel_axis_bypasses_shape_axis_guess():
     data = np.zeros((3, 8, 9), dtype=np.uint16)
     data[0, 2:4, 2:4] = 100

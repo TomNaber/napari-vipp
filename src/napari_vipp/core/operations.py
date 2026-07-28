@@ -3809,6 +3809,11 @@ def assign_channel_colors(data, channel_colors: str = "") -> np.ndarray:
     return np.asarray(data).copy()
 
 
+def assign_channel_names(data, channel_names: str = "") -> np.ndarray:
+    """Pass image data through while updating carried channel name metadata."""
+    return np.asarray(data).copy()
+
+
 def calculate_weighted_image(
     inputs,
     input_count: int = 2,

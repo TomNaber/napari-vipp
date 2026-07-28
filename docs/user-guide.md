@@ -92,6 +92,8 @@ source identity, and operation history where possible. This metadata drives:
 
 Always inspect the selected node's `Output Metadata` table when a workflow
 depends on axis order, channel identity, scale, or acquisition settings.
+Use `Assign Channel Names` to replace names on an explicit channel axis without
+changing pixel values, display colours, fluorophores, or wavelength metadata.
 
 ### Automatic Threshold Histograms
 

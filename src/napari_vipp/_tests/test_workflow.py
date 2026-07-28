@@ -252,6 +252,19 @@ def test_composite_explicit_axis_and_mapping_modes_roundtrip_when_present():
     assert restored_node.params["channel_colors"] == "Red,Unassigned,Blue"
 
 
+def test_assign_channel_names_roundtrips_without_schema_change():
+    pipeline = PrototypePipeline()
+    node = pipeline.add_node("assign_channel_names")
+    pipeline.set_param(node.id, "channel_names", "ch1,CTBP2")
+
+    document = serialize_workflow(pipeline)
+    restored = deserialize_workflow(document)
+    restored_node = next(item for item in restored["nodes"] if item.id == node.id)
+
+    assert document["version"] == WORKFLOW_VERSION == 3
+    assert restored_node.params["channel_names"] == "ch1,CTBP2"
+
+
 def test_composite_legacy_schema_v3_params_load_and_leave_minus_one_unassigned():
     pipeline = PrototypePipeline()
     pipeline.reset_empty_graph()

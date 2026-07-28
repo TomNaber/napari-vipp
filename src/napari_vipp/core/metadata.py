@@ -1356,6 +1356,12 @@ def _transformed_channels(
             params.get("channel_colors", ""),
             count=_state_channel_count(input_state),
         )
+    if operation_id == "assign_channel_names":
+        renamed = with_channel_names(
+            input_state,
+            params.get("channel_names", ""),
+        )
+        return renamed.channels if renamed is not None else channels
     if operation_id == "set_microscope_metadata":
         wavelengths = tuple(
             _positive_float(params.get(f"channel_{index}_wavelength_nm"), 0.0)
@@ -1486,6 +1492,48 @@ def with_channel_colors(
     count = int(state.shape[channel_index])
     channels = _channels_with_colors(state.channels, colors, count=count)
     return replace(state, channels=channels)
+
+
+def with_channel_names(
+    state: ImageState | None,
+    channel_names: str,
+) -> ImageState | None:
+    """Replace carried channel names for one explicit, non-RGB channel axis."""
+    if state is None or not channel_names.strip():
+        return state
+    channel_axes = [
+        index
+        for index, axis in enumerate(state.axes)
+        if axis.type == "channel" or axis.name.casefold() == "c"
+    ]
+    if len(channel_axes) != 1 or not state.axes[channel_axes[0]].is_explicit:
+        raise AmbiguousAxisError(
+            "Channel names require exactly one explicit channel axis in the "
+            "image metadata."
+        )
+    channel_axis = channel_axes[0]
+    if state.axes[channel_axis].name.strip().casefold() in {"rgb", "rgba"}:
+        raise ValueError(
+            "Channel names cannot replace encoded RGB/RGBA component semantics."
+        )
+
+    parts = channel_names.split(",")
+    names = [part.strip() for part in parts]
+    if any(not name for name in names):
+        raise ValueError("Channel names must be nonempty and comma-free.")
+    count = int(state.shape[channel_axis])
+    if len(names) != count:
+        raise ValueError(
+            f"Channel names describe {len(names)} channels, but the array's "
+            f"channel axis contains {count}."
+        )
+
+    channels = list(state.channels[:count])
+    while len(channels) < count:
+        channels.append(ChannelMetadata())
+    for index, name in enumerate(names):
+        channels[index] = replace(channels[index], name=name)
+    return replace(state, channels=tuple(channels))
 
 
 def _channels_with_colors(

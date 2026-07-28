@@ -7673,6 +7673,9 @@ class VippWidget(QWidget):
         if node.operation_id == "composite_to_rgb":
             self._render_composite_to_rgb_parameters(node_id)
             return
+        if node.operation_id == "assign_channel_names":
+            self._render_assign_channel_names_parameters(node_id)
+            return
         if node.operation_id == "assign_channel_colors":
             self._render_assign_channel_colors_parameters(node_id)
             return
@@ -9246,6 +9249,44 @@ class VippWidget(QWidget):
         self.parameter_group.setHidden(False)
         self._render_channel_color_controls(node_id)
 
+    def _render_assign_channel_names_parameters(self, node_id: str) -> None:
+        self.parameter_group.setHidden(False)
+        count = self._channel_name_control_count(node_id)
+        if count <= 0:
+            note = QLabel(
+                "No explicit non-RGB channel axis detected for name assignment."
+            )
+            note.setWordWrap(True)
+            note.setStyleSheet("color: #94a3b8;")
+            self.parameter_form.addRow(note)
+            return
+
+        names = self._node_channel_names(node_id, count)
+        for index, name in enumerate(names):
+            spec = ParameterSpec(
+                f"channel_name_{index}",
+                f"Channel {index + 1} name",
+                "text",
+                name,
+                0,
+                0,
+                1,
+                tooltip=(
+                    "Name carried in channel metadata. Names must be nonempty "
+                    "and cannot contain commas."
+                ),
+            )
+            widget = TextControl(spec, name, ParameterBounds(0, 0, 1, 0))
+            widget.valueChanged.connect(
+                lambda value, slot=index: self._on_metadata_channel_name_changed(
+                    slot,
+                    value,
+                )
+            )
+            self.parameter_form.addRow(spec.label, widget)
+            self._apply_parameter_tooltip(spec, widget)
+            self._parameter_widgets[spec.name] = widget
+
     def _image_source_value(self, node) -> dict[str, object]:
         mode = str(node.params.get("source_mode", "napari layer"))
         layer_name = str(node.params.get("layer_name", "")).strip()
@@ -9347,6 +9388,60 @@ class VippWidget(QWidget):
         if node.operation_id == "input":
             return self.pipeline.output_states.get(node_id)
         return self.pipeline.input_state_for_node(node_id)
+
+    def _channel_name_control_count(self, node_id: str) -> int:
+        state = self.pipeline.input_state_for_node(node_id)
+        if state is None:
+            return 0
+        channel_axes = [
+            index
+            for index, axis in enumerate(state.axes)
+            if _axis_is_explicit(axis)
+            and (axis.type == "channel" or axis.name.casefold() == "c")
+        ]
+        if len(channel_axes) != 1:
+            return 0
+        channel_axis = channel_axes[0]
+        if state.axes[channel_axis].name.strip().casefold() in {"rgb", "rgba"}:
+            return 0
+        return int(state.shape[channel_axis])
+
+    def _node_channel_names(self, node_id: str, count: int) -> list[str]:
+        state = self.pipeline.input_state_for_node(node_id)
+        channels = tuple(getattr(state, "channels", ())) if state is not None else ()
+        names = [
+            (
+                str(getattr(channels[index], "name", "")).strip()
+                if index < len(channels)
+                else ""
+            )
+            or f"Channel {index + 1}"
+            for index in range(count)
+        ]
+        raw = str(self.pipeline.nodes[node_id].params.get("channel_names", ""))
+        if raw.strip():
+            for index, name in enumerate(raw.split(",")[:count]):
+                names[index] = name.strip()
+        return names
+
+    def _on_metadata_channel_name_changed(self, slot: int, value) -> None:
+        node_id = self._selected_node_id
+        node = self.pipeline.nodes.get(node_id)
+        if node is None or node.operation_id != "assign_channel_names":
+            return
+        count = self._channel_name_control_count(node_id)
+        if slot >= count:
+            return
+        names = self._node_channel_names(node_id, count)
+        name = str(value).strip()
+        if names[slot] == name:
+            return
+        self._record_parameter_undo(node_id, f"channel_name_{slot}")
+        names[slot] = name
+        self.pipeline.set_param(node_id, "channel_names", ",".join(names))
+        self._mark_pipeline_dirty(node_id)
+        self._update_thumbnails()
+        self._debounce_timer.start()
 
     def _normalized_image_source_value(
         self,

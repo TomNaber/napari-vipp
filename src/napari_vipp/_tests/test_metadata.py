@@ -8,6 +8,7 @@ from napari_vipp.core.metadata import (
     AXIS_CONFIDENCE_INFERRED,
     AXIS_CONFIDENCE_MIXED,
     DEFERRED_VALUE_RANGE,
+    AmbiguousAxisError,
     AxisMetadata,
     ChannelMetadata,
     ImageState,
@@ -17,6 +18,7 @@ from napari_vipp.core.metadata import (
     transform_multi_input_image_state,
     transform_split_output_state,
     with_channel_colors,
+    with_channel_names,
 )
 
 
@@ -225,6 +227,60 @@ def test_partial_channel_colours_match_the_array_channel_count_exactly():
     assert colored.channels[0].color == 0xFFFF00
     assert colored.channels[1].color == 0x00FFFF
     assert colored.channels[2].color is None
+
+
+def test_channel_names_support_single_channels_and_blank_no_op():
+    state = image_state_from_array(
+        np.zeros((1, 4, 5), dtype=np.uint16),
+        layer_metadata={"axes": "CYX"},
+        channels=(ChannelMetadata(name="red", color=0xFF0000),),
+    )
+
+    assert with_channel_names(state, "") is state
+    renamed = with_channel_names(state, "CTBP2")
+
+    assert renamed is not None
+    assert renamed.channels == (ChannelMetadata(name="CTBP2", color=0xFF0000),)
+
+
+@pytest.mark.parametrize(
+    ("names", "message"),
+    (
+        ("CTBP2", "describe 1 channels"),
+        ("CTBP2,,DAPI", "nonempty and comma-free"),
+        ("CT,BP2,DAPI", "describe 3 channels"),
+    ),
+)
+def test_channel_names_reject_invalid_ordered_lists(names, message):
+    state = image_state_from_array(
+        np.zeros((2, 4, 5), dtype=np.uint16),
+        layer_metadata={"axes": "CYX"},
+    )
+
+    with pytest.raises(ValueError, match=message):
+        with_channel_names(state, names)
+
+
+def test_channel_names_require_one_explicit_non_rgb_channel_axis():
+    scalar = image_state_from_array(
+        np.zeros((4, 5), dtype=np.uint16),
+        layer_metadata={"axes": "YX"},
+    )
+    rgb = image_state_from_array(
+        np.zeros((4, 5, 3), dtype=np.uint8),
+        layer_metadata={
+            "axes": [
+                {"name": "y", "type": "space"},
+                {"name": "x", "type": "space"},
+                {"name": "rgb", "type": "channel"},
+            ]
+        },
+    )
+
+    with pytest.raises(AmbiguousAxisError, match="exactly one explicit"):
+        with_channel_names(scalar, "CTBP2")
+    with pytest.raises(ValueError, match="encoded RGB/RGBA"):
+        with_channel_names(rgb, "R,G,B")
 
 
 @pytest.mark.parametrize(

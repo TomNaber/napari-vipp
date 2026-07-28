@@ -40,6 +40,7 @@ from napari_vipp.core.operations import (
     add_metadata_columns,
     analyze_skeleton,
     assign_channel_colors,
+    assign_channel_names,
     auto_watershed_from_mask,
     average_blur,
     batch_output,
@@ -1196,6 +1197,7 @@ _EXPLICIT_AXIS_METADATA_OPERATIONS = {
 }
 _EXPLICIT_CHANNEL_AXIS_OPERATIONS = {
     "assign_channel_colors",
+    "assign_channel_names",
     "extract_channel",
     "split_channels",
 }
@@ -4547,6 +4549,27 @@ NODE_LIBRARY: tuple[OperationSpec, ...] = (
         preserves_input_type=True,
     ),
     OperationSpec(
+        "assign_channel_names",
+        "Assign Channel Names",
+        IMAGE_DATA_CATEGORY,
+        "array",
+        "image",
+        (
+            ParameterSpec(
+                "channel_names",
+                "Channel names",
+                "text",
+                "",
+                0,
+                0,
+                1,
+            ),
+        ),
+        assign_channel_names,
+        subcategory=CHANNELS_COMPOSITES_GROUP,
+        preserves_input_type=True,
+    ),
+    OperationSpec(
         "rescale_intensity",
         "Rescale Intensity",
         INTENSITY_CONTRAST_CATEGORY,
@@ -7514,6 +7537,18 @@ def _validate_operation_axis_semantics(
             image_state,
             operation_title=node.title,
         )
+        if node.operation_id == "assign_channel_names":
+            assert image_state is not None
+            channel_axis = _image_state_channel_axis(image_state)
+            assert channel_axis is not None
+            if image_state.axes[channel_axis].name.strip().casefold() in {
+                "rgb",
+                "rgba",
+            }:
+                raise ValueError(
+                    "Assign Channel Names cannot replace encoded RGB/RGBA "
+                    "component semantics."
+                )
         return
     if node.operation_id == "composite_to_rgb":
         channel_axis_mode = _resolved_composite_channel_axis_mode(kwargs)

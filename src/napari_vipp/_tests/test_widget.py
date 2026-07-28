@@ -2413,6 +2413,7 @@ def test_image_data_category_groups_source_axis_and_channel_nodes(qtbot):
     assert _palette_child_by_text(channels, "Combine Channels")
     assert _palette_child_by_text(channels, "Split Channels")
     assert _palette_child_by_text(channels, "Composite \u2192 RGB")
+    assert _palette_child_by_text(channels, "Assign Channel Names")
     assert _palette_child_by_text(utilities, "Convert Dtype")
     assert _palette_child_by_text(intensity, "Rescale Intensity")
     assert _palette_child_by_text(intensity, "Normalize")
@@ -2422,6 +2423,40 @@ def test_image_data_category_groups_source_axis_and_channel_nodes(qtbot):
     assert _palette_child_by_text(math_logic, "Calculate New Image")
     assert _palette_child_by_text(math_logic, "Add")
     assert _palette_child_by_text(math_logic, "Logical XOR")
+
+
+def test_assign_channel_names_renders_and_updates_each_channel(qtbot):
+    data = np.zeros((2, 8, 9), dtype=np.uint16)
+    state = image_state_from_array(
+        data,
+        layer_metadata={"axes": "CYX"},
+        channels=(
+            ChannelMetadata(name="red", color=0xFF0000),
+            ChannelMetadata(name="green", color=0x00FF00),
+        ),
+    )
+    viewer = _Viewer(data, metadata={"vipp_image_state": state.to_dict()})
+    widget = VippWidget(viewer)
+    qtbot.addWidget(widget)
+
+    node = widget.add_node_from_palette("assign_channel_names")
+    widget._connect_nodes("input", node.id)
+    widget.graph_view.select_node(node.id)
+
+    assert widget._parameter_widgets["channel_name_0"].value() == "red"
+    assert widget._parameter_widgets["channel_name_1"].value() == "green"
+
+    widget._parameter_widgets["channel_name_0"].edit.setText("ch1")
+    widget._parameter_widgets["channel_name_1"].edit.setText("CTBP2")
+    widget._debounce_timer.stop()
+    widget.run_pipeline(force_sync=True)
+    widget.inspect_node(node.id)
+
+    assert node.params["channel_names"] == "ch1,CTBP2"
+    assert [
+        channel.name for channel in widget.pipeline.output_states[node.id].channels
+    ] == ["ch1", "CTBP2"]
+    assert _metadata_value(widget, "Channel names") == "ch1, CTBP2"
 
 
 def test_set_pixel_size_uses_numeric_entries_without_sliders(qtbot):

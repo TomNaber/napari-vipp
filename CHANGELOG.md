@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Channel Metadata
+
+- Added `Assign Channel Names` under `Image Data → Channels & Composites`, with
+  one editable field per explicit non-RGB channel and metadata-only propagation
+  into downstream nodes and supported exports.
 ## 0.12.0a3 - 2026-07-20
 
 ### Release Overview
