@@ -5091,6 +5091,7 @@ class VippWidget(QWidget):
         source_bindings: list[dict] | None = None,
         existing_file_policy: str = ExistingFilePolicy.ERROR.value,
         continue_on_error: bool = True,
+        recursive: bool = False,
         expected_items: tuple[BatchItemPlan, ...] | None = None,
         excluded_item_indexes: frozenset[int] | None = None,
     ) -> BatchRunResult:
@@ -5107,6 +5108,7 @@ class VippWidget(QWidget):
             source_bindings=source_bindings,
             existing_file_policy=existing_file_policy,
             continue_on_error=continue_on_error,
+            recursive=recursive,
             workflow=workflow,
         )
         output_path = config.resolve_path(config.output_dir)
@@ -5216,6 +5218,7 @@ class VippWidget(QWidget):
         source_bindings: list[dict] | None = None,
         existing_file_policy: str = ExistingFilePolicy.ERROR.value,
         continue_on_error: bool = True,
+        recursive: bool = False,
         workflow: dict | None = None,
     ) -> BatchConfig:
         return self._collection_batch_controller.build_config(
@@ -5228,6 +5231,7 @@ class VippWidget(QWidget):
             source_bindings=source_bindings,
             existing_file_policy=existing_file_policy,
             continue_on_error=continue_on_error,
+            recursive=recursive,
             workflow=workflow,
         )
 
@@ -5253,6 +5257,7 @@ class VippWidget(QWidget):
         preview_limit: int | None = 25,
         existing_file_policy: str = ExistingFilePolicy.ERROR.value,
         continue_on_error: bool = True,
+        recursive: bool = False,
         activate_representative: bool = True,
     ) -> BatchPreviewResult:
         result = self._collection_batch_controller.preview(
@@ -5266,6 +5271,7 @@ class VippWidget(QWidget):
             preview_limit=preview_limit,
             existing_file_policy=existing_file_policy,
             continue_on_error=continue_on_error,
+            recursive=recursive,
         )
         config_path = None
         if self._active_collection_batch_dialog is not None:

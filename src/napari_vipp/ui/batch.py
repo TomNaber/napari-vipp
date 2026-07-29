@@ -237,6 +237,10 @@ class CollectionBatchDialog(QDialog):
         self.source_group = QGroupBox("Batch sources")
         self.source_layout = QVBoxLayout(self.source_group)
         self._set_source_nodes(source_nodes)
+        self.recursive_checkbox = QCheckBox("Search subfolders recursively")
+        self.recursive_checkbox.setToolTip(
+            "Apply each source pattern to its selected folder and all subfolders."
+        )
 
         self.output_button = QPushButton("Folder...")
         self.output_button.clicked.connect(self._browse_output)
@@ -279,9 +283,10 @@ class CollectionBatchDialog(QDialog):
 
         help_label = QLabel(
             "Bind each Image Source that should change per batch item to a "
-            "folder and file pattern. VIPP zips bound sources by sorted file "
-            "order and assigns each row a stable batch ID. The table refreshes "
-            "automatically after folder or pattern changes. Preview batch "
+            "folder and file pattern. Optionally search all subfolders "
+            "recursively. VIPP zips bound sources by sorted file order and "
+            "assigns each row a stable batch ID. The table refreshes "
+            "automatically after source-search changes. Preview batch "
             "additionally calculates the first row as a representative graph "
             "view; Preview selected in graph changes that single "
             "representative. Run batch performs a fresh preflight, processes "
@@ -374,6 +379,7 @@ class CollectionBatchDialog(QDialog):
         content_layout.addWidget(self.demo_guide_label)
         content_layout.addWidget(self.demo_path_row)
         content_layout.addWidget(self.source_group)
+        content_layout.addWidget(self.recursive_checkbox)
         content_layout.addLayout(form)
         content_layout.addWidget(help_label)
         content_layout.addWidget(preview_row)
@@ -403,6 +409,7 @@ class CollectionBatchDialog(QDialog):
         self.format_combo.currentIndexChanged.connect(
             self._planning_setting_changed
         )
+        self.recursive_checkbox.toggled.connect(self._planning_setting_changed)
         self.existing_policy_combo.currentIndexChanged.connect(
             self._invalidate_preview_plan
         )
@@ -675,6 +682,7 @@ class CollectionBatchDialog(QDialog):
             "output_dir": self.output_edit.text(),
             "pattern": self.pattern_edit.text(),
             "source_bindings": bindings,
+            "recursive": self.recursive_checkbox.isChecked(),
             "image_format": self.format_combo.currentText(),
             "existing_file_policy": str(self.existing_policy_combo.currentData()),
             "save_workflow_snapshot": self.workflow_checkbox.isChecked(),
@@ -1323,6 +1331,7 @@ class CollectionBatchDialog(QDialog):
     def _run_controls(self) -> tuple[QWidget, ...]:
         controls: list[QWidget] = [
             self.source_group,
+            self.recursive_checkbox,
             self.output_edit,
             self.output_button,
             self.format_combo,
@@ -1484,6 +1493,7 @@ class CollectionBatchDialog(QDialog):
         self.workflow_checkbox.setChecked(True)
         self.script_checkbox.setChecked(config.save_python_script)
         self.continue_checkbox.setChecked(config.continue_on_error)
+        self.recursive_checkbox.setChecked(config.recursive)
         self._schedule_auto_preview()
 
     def _browse_input(self) -> None:

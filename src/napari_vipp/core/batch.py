@@ -248,6 +248,7 @@ class BatchConfig:
     save_workflow_snapshot: bool = True
     save_python_script: bool = True
     continue_on_error: bool = True
+    recursive: bool = False
     pairing_policy: str = PAIRING_POLICY
     base_dir: Path | None = field(default=None, compare=False, repr=False)
 
@@ -280,6 +281,7 @@ class BatchConfig:
             "save_workflow_snapshot",
             "save_python_script",
             "continue_on_error",
+            "recursive",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"Batch config {name} must be a boolean.")
@@ -298,6 +300,7 @@ class BatchConfig:
             },
             "output_dir": _config_path_text(self.output_dir),
             "pairing_policy": self.pairing_policy,
+            "recursive": self.recursive,
             "sources": [source.to_dict() for source in self.sources],
             "outputs": [output.to_dict() for output in self.outputs],
             "defaults": {
@@ -327,6 +330,7 @@ class BatchConfig:
             "defaults",
             "artifacts",
             "continue_on_error",
+            "recursive",
         }
         _reject_unknown_keys(data, allowed, "Batch config")
         if data.get("type") != BATCH_CONFIG_TYPE:
@@ -391,6 +395,7 @@ class BatchConfig:
                 artifacts, "save_python_script", "batch config artifacts"
             ),
             continue_on_error=_required_bool(data, "continue_on_error", "batch config"),
+            recursive=data.get("recursive", False),
             pairing_policy=_required_text(data, "pairing_policy", "batch config"),
             base_dir=(
                 Path(base_dir).expanduser().resolve() if base_dir is not None else None
@@ -962,7 +967,11 @@ def build_batch_plan(config: BatchConfig) -> BatchPlan:
         input_dir = config.resolve_path(source.input_dir)
         if not input_dir.is_dir():
             raise ValueError(f"Batch source '{source.title}' folder does not exist.")
-        paths = _iter_source_paths(input_dir, source.pattern)
+        paths = _iter_source_paths(
+            input_dir,
+            source.pattern,
+            recursive=config.recursive,
+        )
         if not paths:
             raise ValueError(
                 f"No files matched '{source.pattern}' for "
@@ -2241,14 +2250,20 @@ def _runtime_versions() -> dict[str, object]:
     }
 
 
-def _iter_source_paths(input_dir: Path, pattern: str) -> list[Path]:
+def _iter_source_paths(
+    input_dir: Path,
+    pattern: str,
+    *,
+    recursive: bool = False,
+) -> list[Path]:
     patterns = [
         item.strip() for item in _PATTERN_SEPARATORS.split(str(pattern)) if item.strip()
     ] or ["*.tif"]
     paths: list[Path] = []
     seen: set[Path] = set()
+    matcher = input_dir.rglob if recursive else input_dir.glob
     for item in patterns:
-        for path in input_dir.glob(item):
+        for path in matcher(item):
             if not _is_supported_local_image_source(path) or path in seen:
                 continue
             seen.add(path)

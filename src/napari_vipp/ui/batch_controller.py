@@ -51,6 +51,7 @@ class CollectionBatchController:
         source_bindings: list[dict] | None = None,
         existing_file_policy: str = ExistingFilePolicy.ERROR.value,
         continue_on_error: bool = True,
+        recursive: bool = False,
         workflow: dict | None = None,
     ) -> BatchConfig:
         """Build a validated config from one stable workflow snapshot."""
@@ -67,6 +68,7 @@ class CollectionBatchController:
             source_bindings=source_bindings,
             existing_file_policy=existing_file_policy,
             continue_on_error=continue_on_error,
+            recursive=recursive,
         )
 
     def save_config(
@@ -124,6 +126,7 @@ class CollectionBatchController:
         preview_limit: int | None = 25,
         existing_file_policy: str = ExistingFilePolicy.ERROR.value,
         continue_on_error: bool = True,
+        recursive: bool = False,
     ) -> BatchPreviewResult:
         """Map the core preflight plan into the dialog preview contract."""
         workflow = self._workflow_document_provider()
@@ -137,6 +140,7 @@ class CollectionBatchController:
             source_bindings=source_bindings,
             existing_file_policy=existing_file_policy,
             continue_on_error=continue_on_error,
+            recursive=recursive,
             workflow=workflow,
         )
         plan = plan_batch(

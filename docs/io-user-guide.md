@@ -122,6 +122,12 @@ row is reproducible only when that `Image Source` already uses a fixed local
 file path; napari-layer and bundled-sample sources must be bound to a collection
 before saving or running a batch config.
 
+Enable `Search subfolders recursively` to apply every bound source pattern to
+its selected folder and all nested folders. The setting applies to all source
+rows, refreshes the preview when changed, and is preserved in saved batch
+configs. It is disabled by default, so existing workspaces continue to match
+only the selected folders' top-level files.
+
 The main toolbar places `Batch workspace...` between workflow loading and the
 separate export actions. It is the single entry point for opening or returning
 to the retained workspace; the representative strip only navigates samples and

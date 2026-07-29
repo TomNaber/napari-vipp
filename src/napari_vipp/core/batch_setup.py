@@ -36,6 +36,7 @@ def build_collection_batch_config(
     source_bindings: Sequence[Mapping[str, object]] | None = None,
     existing_file_policy: str = ExistingFilePolicy.ERROR.value,
     continue_on_error: bool = True,
+    recursive: bool = False,
 ) -> BatchConfig:
     """Translate one workflow and collection form into a validated config."""
     output_text = str(output_dir).strip()
@@ -75,6 +76,7 @@ def build_collection_batch_config(
         save_workflow_snapshot=True,
         save_python_script=save_python_script,
         continue_on_error=continue_on_error,
+        recursive=recursive,
     )
     validate_batch_config(
         workflow,
