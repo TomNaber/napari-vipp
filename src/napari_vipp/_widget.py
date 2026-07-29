@@ -5832,10 +5832,12 @@ class VippWidget(QWidget):
         return ("sources", ())
 
     def _dirty_nodes_for_run(self, source_signature: tuple) -> set[str] | None:
-        if source_signature != self._last_pipeline_source_signature:
+        dirty_nodes = self._pending_dirty_node_ids & set(self.pipeline.nodes)
+        if self._last_pipeline_source_signature is None:
             self._pending_dirty_node_ids.clear()
             return None
-        dirty_nodes = self._pending_dirty_node_ids & set(self.pipeline.nodes)
+        if source_signature != self._last_pipeline_source_signature and not dirty_nodes:
+            return None
         return set(dirty_nodes) if dirty_nodes else None
 
     def _complete_pipeline_run(
