@@ -11,8 +11,13 @@ from napari_vipp.core.grid import (
     validate_aligned_image_states,
     validate_mask_broadcast_image_states,
     validate_psf_image_states,
+    validate_spatial_mask_crop_image_states,
 )
-from napari_vipp.core.metadata import AxisMetadata, image_state_from_array
+from napari_vipp.core.metadata import (
+    AxisMetadata,
+    ChannelMetadata,
+    image_state_from_array,
+)
 from napari_vipp.core.pipeline import PrototypePipeline, SourcePayload
 
 
@@ -459,6 +464,150 @@ def test_pipeline_preserves_same_shape_mask_behavior_without_explicit_axes():
     )
 
     np.testing.assert_array_equal(outputs[masked.id], np.where(mask, image, 0))
+
+
+def _tczyx_image_state(shape=(2, 3, 4, 6, 7)):
+    return image_state_from_array(
+        np.zeros(shape, dtype=np.uint16),
+        axes=(
+            AxisMetadata("t", "time", unit="second", scale=2, translation=3),
+            AxisMetadata("c", "channel"),
+            AxisMetadata(
+                "z", "space", unit="micrometer", scale=0.5, translation=4
+            ),
+            AxisMetadata(
+                "y", "space", unit="micrometer", scale=0.2, translation=10
+            ),
+            AxisMetadata(
+                "x", "space", unit="micrometer", scale=0.3, translation=20
+            ),
+        ),
+        source_name="source volume",
+        channels=tuple(ChannelMetadata(name=f"channel {index}") for index in range(3)),
+    )
+
+
+def _yx_roi_state(shape=(6, 7), *, y_scale=0.2, x_translation=20):
+    return image_state_from_array(
+        np.zeros(shape, dtype=np.uint16),
+        axes=(
+            AxisMetadata(
+                "y", "space", unit="micrometer", scale=y_scale, translation=10
+            ),
+            AxisMetadata(
+                "x",
+                "space",
+                unit="micrometer",
+                scale=0.3,
+                translation=x_translation,
+            ),
+        ),
+        source_name="drawn ROI labels",
+    )
+
+
+def test_spatial_crop_grid_maps_yx_and_zyx_onto_tczyx():
+    image_state = _tczyx_image_state()
+    yx_state = _yx_roi_state()
+    zyx_state = _state(
+        (4, 6, 7),
+        (
+            AxisMetadata(
+                "z", "space", unit="micrometer", scale=0.5, translation=4
+            ),
+            AxisMetadata(
+                "y", "space", unit="micrometer", scale=0.2, translation=10
+            ),
+            AxisMetadata(
+                "x", "space", unit="micrometer", scale=0.3, translation=20
+            ),
+        ),
+    )
+
+    assert validate_spatial_mask_crop_image_states(image_state, yx_state) == (3, 4)
+    assert validate_spatial_mask_crop_image_states(image_state, zyx_state) == (
+        2,
+        3,
+        4,
+    )
+
+
+def test_pipeline_crops_yx_roi_and_shifts_only_spatial_origins():
+    image = np.arange(2 * 3 * 4 * 6 * 7, dtype=np.uint16).reshape(2, 3, 4, 6, 7)
+    mask = np.zeros((6, 7), dtype=np.uint16)
+    mask[1:5, 2:4] = 9
+    mask[3:5, 2:6] = 9
+    original_mask = mask.copy()
+    image_state = _tczyx_image_state()
+    mask_state = _yx_roi_state()
+    pipeline = PrototypePipeline()
+    pipeline.reset_empty_graph()
+    mask_source = pipeline.add_node("input")
+    masked = pipeline.add_node("mask_image")
+    pipeline.set_param(masked.id, "outside_value", 99)
+    pipeline.set_param(masked.id, "crop_image_to_mask", True)
+    assert pipeline.connect("input", masked.id, target_port=0).success
+    assert pipeline.connect(mask_source.id, masked.id, target_port=1).success
+
+    output = pipeline.run(
+        image,
+        source_payloads={
+            "input": SourcePayload(image, image_state=image_state),
+            mask_source.id: SourcePayload(mask, image_state=mask_state),
+        },
+    )[masked.id]
+
+    expected = image[:, :, :, 1:5, 2:6].copy()
+    expected[..., mask[1:5, 2:6] == 0] = 99
+    np.testing.assert_array_equal(output, expected)
+    np.testing.assert_array_equal(mask, original_mask)
+    assert output.shape == (2, 3, 4, 4, 4)
+    assert output.flags.c_contiguous
+
+    output_state = pipeline.output_states[masked.id]
+    assert output_state is not None
+    assert [axis.translation for axis in output_state.axes] == [
+        3,
+        0,
+        4,
+        pytest.approx(10.2),
+        pytest.approx(20.6),
+    ]
+    assert [axis.scale for axis in output_state.axes] == [2, 1, 0.5, 0.2, 0.3]
+    assert output_state.channels == image_state.channels
+    assert output_state.acquisition == image_state.acquisition
+    assert output_state.source == image_state.source
+    assert output_state.history[-1] == (
+        "Mask Image: applied mask from 'drawn ROI labels'; cropped "
+        "Y[1:5], X[2:6]"
+    )
+
+
+@pytest.mark.parametrize(
+    ("mask_state", "message"),
+    [
+        (_yx_roi_state(shape=(5, 7)), "sizes differ"),
+        (_yx_roi_state(y_scale=0.4), "sample spacing differs"),
+        (_yx_roi_state(x_translation=21), "origins differ"),
+    ],
+)
+def test_spatial_crop_grid_rejects_grid_mismatch(mask_state, message):
+    with pytest.raises(ValueError, match=message):
+        validate_spatial_mask_crop_image_states(_tczyx_image_state(), mask_state)
+
+
+def test_spatial_crop_grid_rejects_ambiguous_image_axes():
+    image_state = _state(
+        (6, 6, 7),
+        (
+            AxisMetadata("y", "space"),
+            AxisMetadata("y", "space"),
+            AxisMetadata("x", "space"),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="multiple y:space axes"):
+        validate_spatial_mask_crop_image_states(image_state, _yx_roi_state())
 
 
 def test_pipeline_rejects_psf_sampling_mismatch_before_deconvolution():

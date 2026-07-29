@@ -953,6 +953,10 @@ class VippWidget(QWidget):
             self._on_live_source_invalidated
         )
         self._live_source_node_layers: dict[str, object] = {}
+        self._shapes_source_grids: dict[
+            int,
+            tuple[object, tuple[int, int], str, dict[str, object] | None],
+        ] = {}
         self.pipeline = PrototypePipeline()
         self._selected_node_id = "gaussian"
         self._workflow_load_selection_in_progress = False
@@ -2770,7 +2774,10 @@ class VippWidget(QWidget):
             or self._active_collection_batch_dialog is not None
         ):
             self._clear_interactive_collection_batch_session()
-        if self._active_pipeline_run_id is not None:
+        if operation_id == "input":
+            self._mark_pipeline_dirty(node.id)
+            self.run_pipeline()
+        elif self._active_pipeline_run_id is not None:
             # A loose node does not need calculation yet, but it does change the
             # serialized workflow owned by the active worker. Register that
             # additive graph edit as independent pending work so the worker's
@@ -6483,6 +6490,7 @@ class VippWidget(QWidget):
         if layer is None:
             return None, None
         snapshot = self._live_source_adapter.snapshot(layer)
+        snapshot = self._rasterize_shapes_source(layer, snapshot)
         if not snapshot.data_is_detached:
             raise ValueError(
                 f"Live napari source '{snapshot.name}' uses "
@@ -6499,6 +6507,147 @@ class VippWidget(QWidget):
                 snapshot.token,
             ),
             layer,
+        )
+
+    def _rasterize_shapes_source(
+        self,
+        layer,
+        snapshot: LiveLayerSnapshot,
+    ) -> LiveLayerSnapshot:
+        """Rasterize a Shapes layer on its reference image's YX plane."""
+        match = re.fullmatch(r"(.+) - Shapes(?: \d+)?", snapshot.name)
+        to_labels = getattr(layer, "to_labels", None)
+        if snapshot.data_is_detached or match is None or not callable(to_labels):
+            return snapshot
+
+        layer_ndim = int(getattr(layer, "ndim", 0))
+        if layer_ndim < 2:
+            raise ValueError(
+                "VIPP can rasterize a Shapes source only when it has a 2D YX "
+                "drawing plane."
+            )
+
+        reference_name = match.group(1)
+        cached_grid = self._shapes_source_grids.get(id(layer))
+        if (
+            cached_grid is not None
+            and cached_grid[0] is layer
+            and cached_grid[2] == reference_name
+        ):
+            _, reference_shape, _, carried_state = cached_grid
+        else:
+            reference = self._layer_by_name(reference_name)
+            reference_data = getattr(reference, "data", None)
+            if reference is None or not isinstance(reference_data, np.ndarray):
+                raise ValueError(
+                    f"Live napari Shapes source '{snapshot.name}' needs its "
+                    f"materialized reference layer '{reference_name}' to remain open."
+                )
+            reference_metadata = getattr(reference, "metadata", None)
+            reference_state = image_state_from_array(
+                reference_data,
+                layer_metadata=(
+                    reference_metadata
+                    if isinstance(reference_metadata, dict)
+                    else None
+                ),
+                source_name=reference_name,
+                defer_statistics=True,
+            )
+            displayed_shape = tuple(int(size) for size in reference_data.shape)
+            displayed_axes = reference_state.axes if reference_state is not None else ()
+            if bool(getattr(reference, "rgb", False)):
+                displayed_shape = displayed_shape[:-1]
+                displayed_axes = displayed_axes[:-1]
+            leading_axes = displayed_axes[:-2]
+            if (
+                len(displayed_shape) < 2
+                or tuple(
+                    (axis.name.lower(), axis.type.lower())
+                    for axis in displayed_axes[-2:]
+                )
+                != (("y", "space"), ("x", "space"))
+                or any(
+                    axis.type.lower() not in {"time", "channel"}
+                    for axis in leading_axes
+                )
+            ):
+                raise ValueError(
+                    "VIPP can rasterize a Shapes source only from a YX reference; "
+                    "leading time or channel axes are allowed and ignored. Inspect "
+                    "a 2D MIP before creating the Shapes layer."
+                )
+            reference_shape = displayed_shape[-2:]
+            carried_state = replace(
+                reference_state,
+                shape=reference_shape,
+                axes=displayed_axes[-2:],
+            ).to_dict()
+            self._shapes_source_grids[id(layer)] = (
+                layer,
+                reference_shape,
+                reference_name,
+                carried_state,
+            )
+
+        labels = np.array(to_labels(reference_shape), copy=True, order="C")
+        if labels.shape != reference_shape:
+            raise ValueError(
+                f"Napari Shapes source '{snapshot.name}' rasterized to "
+                f"{labels.shape}, expected reference grid {reference_shape}."
+            )
+        labels.setflags(write=False)
+        metadata = dict(snapshot.metadata)
+        if carried_state is not None:
+            carried = deepcopy(carried_state)
+            carried["source_name"] = snapshot.name
+            metadata["vipp_image_state"] = carried
+        metadata["vipp_shapes_reference"] = reference_name
+
+        scale = snapshot.scale
+        translate = snapshot.translate
+        units = snapshot.units
+        axis_labels = snapshot.axis_labels
+        rotate = snapshot.rotate
+        affine = snapshot.affine
+        shear = snapshot.shear
+        if layer_ndim > 2:
+            if scale is not None and len(scale) == layer_ndim:
+                scale = scale[-2:]
+            if translate is not None and len(translate) == layer_ndim:
+                translate = translate[-2:]
+            if units is not None and len(units) == layer_ndim:
+                units = units[-2:]
+            if axis_labels is not None and len(axis_labels) == layer_ndim:
+                axis_labels = axis_labels[-2:]
+            rotate_array = np.asarray(rotate, dtype=float)
+            if rotate_array.shape == (layer_ndim, layer_ndim) and np.allclose(
+                rotate_array, np.eye(layer_ndim)
+            ):
+                rotate = ((1.0, 0.0), (0.0, 1.0))
+            affine_array = np.asarray(affine, dtype=float)
+            if affine_array.shape == (layer_ndim + 1, layer_ndim + 1) and np.allclose(
+                affine_array, np.eye(layer_ndim + 1)
+            ):
+                affine = (
+                    (1.0, 0.0, 0.0),
+                    (0.0, 1.0, 0.0),
+                    (0.0, 0.0, 1.0),
+                )
+            if shear is not None and np.allclose(shear, 0):
+                shear = None
+        return replace(
+            snapshot,
+            data=labels,
+            metadata=metadata,
+            scale=scale,
+            translate=translate,
+            rotate=rotate,
+            shear=shear,
+            affine=affine,
+            units=units,
+            axis_labels=axis_labels,
+            data_is_detached=True,
         )
 
     @contextmanager

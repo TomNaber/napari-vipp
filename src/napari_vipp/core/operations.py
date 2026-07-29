@@ -5251,7 +5251,9 @@ def mask_image(
     inputs,
     outside_value: float = 0.0,
     invert_mask: str = "no",
+    crop_image_to_mask: bool = False,
     mask_axis_mapping: Sequence[int] | None = None,
+    mask_crop_bounds: Sequence[Sequence[int]] | None = None,
 ) -> np.ndarray:
     """Apply a binary mask without guessing omitted axes from their sizes."""
     arrays = [np.asarray(item) for item in inputs if item is not None]
@@ -5259,9 +5261,48 @@ def mask_image(
         raise ValueError("Mask Image needs an image input and a mask input.")
 
     image = arrays[0]
+    raw_mask = np.asarray(arrays[1])
+    if crop_image_to_mask:
+        if str(invert_mask).lower() == "yes":
+            raise ValueError(
+                "Mask Image cannot crop an inverted mask. Disable either "
+                "'Invert mask' or 'Crop image to mask'."
+            )
+        mask, actual_bounds = validated_mask_crop(raw_mask)
+        if mask_crop_bounds is not None:
+            supplied_bounds = tuple(
+                (int(bounds[0]), int(bounds[1])) for bounds in mask_crop_bounds
+            )
+            if supplied_bounds != actual_bounds:
+                raise ValueError(
+                    "Mask Image crop bounds no longer match the connected mask."
+                )
+        else:
+            supplied_bounds = actual_bounds
+
+        broadcast_mask = _broadcast_mask_to_image(
+            mask,
+            image.shape,
+            mask_axis_mapping=mask_axis_mapping,
+        )
+        mapping = (
+            tuple(range(mask.ndim))
+            if mask.shape == image.shape
+            else tuple(int(axis) for axis in mask_axis_mapping or ())
+        )
+        slices = [slice(None)] * image.ndim
+        for mask_axis, image_axis in enumerate(mapping):
+            start, stop = supplied_bounds[mask_axis]
+            slices[image_axis] = slice(start, stop)
+        crop_slices = tuple(slices)
+        output = np.asarray(image[crop_slices]).copy(order="C")
+        cropped_mask = broadcast_mask[crop_slices]
+        output[~cropped_mask] = np.asarray(outside_value, dtype=output.dtype)
+        return output
+
     # This port accepts masks or labels, never color data. Treat every nonzero
     # label as selected without interpreting a trailing length-3/4 axis as RGB.
-    mask = np.asarray(arrays[1]) != 0
+    mask = raw_mask != 0
     if str(invert_mask).lower() == "yes":
         mask = ~mask
     mask = _broadcast_mask_to_image(
@@ -5272,6 +5313,57 @@ def mask_image(
     output = np.asarray(image).copy()
     output[~mask] = np.asarray(outside_value, dtype=output.dtype)
     return output
+
+
+def validated_mask_crop(
+    mask_data,
+) -> tuple[np.ndarray, tuple[tuple[int, int], ...]]:
+    """Validate one hole-free binary ROI and return its mask and tight bounds."""
+    mask = np.asarray(mask_data)
+    if mask.ndim not in {2, 3}:
+        raise ValueError(
+            "Mask Image cropping requires a spatial YX or ZYX mask "
+            f"(received {mask.ndim}D)."
+        )
+    if mask.dtype != np.bool_ and not np.issubdtype(mask.dtype, np.integer):
+        raise ValueError(
+            "Mask Image cropping requires a Boolean or integer binary mask."
+        )
+
+    values = np.unique(mask)
+    if values.size != 2 or values[0] != 0 or values[1] <= 0:
+        if not np.any(mask):
+            raise ValueError(
+                "Mask Image cropping requires a non-empty binary ROI with "
+                "background value 0."
+            )
+        raise ValueError(
+            "Mask Image cropping requires background 0 and exactly one "
+            "positive foreground value."
+        )
+
+    foreground = mask != 0
+    full_connectivity = ndi.generate_binary_structure(mask.ndim, mask.ndim)
+    _labels, component_count = ndi.label(
+        foreground,
+        structure=full_connectivity,
+    )
+    if component_count != 1:
+        raise ValueError(
+            "Mask Image cropping requires one connected foreground ROI; "
+            f"found {component_count} disconnected components."
+        )
+    if np.any(ndi.binary_fill_holes(foreground) & ~foreground):
+        raise ValueError(
+            "Mask Image cropping requires a solid ROI without enclosed holes "
+            "or cavities."
+        )
+
+    bounds = tuple(
+        (int(indices.min()), int(indices.max()) + 1)
+        for indices in np.nonzero(foreground)
+    )
+    return foreground, bounds
 
 
 def logical_and(inputs, input_count: int = 2) -> np.ndarray:

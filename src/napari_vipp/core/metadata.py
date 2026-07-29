@@ -1246,6 +1246,20 @@ def _multi_input_axes(
     operation_id: str,
     params: dict[str, Any],
 ) -> tuple[AxisMetadata, ...]:
+    if operation_id == "mask_image" and params.get("crop_image_to_mask", False):
+        mapping = tuple(int(axis) for axis in params.get("mask_axis_mapping", ()))
+        bounds = tuple(
+            (int(bound[0]), int(bound[1]))
+            for bound in params.get("mask_crop_bounds", ())
+        )
+        if len(mapping) != len(bounds):
+            raise ValueError(
+                "Mask Image crop metadata requires one bound per mask axis."
+            )
+        axes = list(first_axes)
+        for image_axis, (start, _stop) in zip(mapping, bounds, strict=True):
+            axes[image_axis] = _translated_axis(axes[image_axis], start)
+        return tuple(axes)
     if operation_id == "combine_channels":
         channel_index = _validated_insert_axis(
             params.get("channel_axis", 0),
@@ -2460,7 +2474,20 @@ def _multi_input_history(
             f"(weights {weights}, offset {_format_number(offset)})"
         )
     if operation_id == "mask_image":
-        return f"{operation_title}: applied mask"
+        if not params.get("crop_image_to_mask", False):
+            return f"{operation_title}: applied mask"
+        mapping = tuple(int(axis) for axis in params.get("mask_axis_mapping", ()))
+        bounds = tuple(
+            (int(bound[0]), int(bound[1]))
+            for bound in params.get("mask_crop_bounds", ())
+        )
+        crop = ", ".join(
+            f"{states[0].axes[image_axis].short_label}[{start}:{stop}]"
+            for image_axis, (start, stop) in zip(mapping, bounds, strict=True)
+        )
+        mask_source = states[1].source_name if len(states) > 1 else ""
+        provenance = f" from {mask_source!r}" if mask_source else " from Mask input"
+        return f"{operation_title}: applied mask{provenance}; cropped {crop}"
     if operation_id == "filter_labels_by_property":
         column = str(params.get("property_column", "auto")).strip() or "auto"
         return f"{operation_title}: filtered by {column}"

@@ -880,6 +880,31 @@ automatically a scientifically better reconstruction.
 
 ## Axis And Channel Workflows
 
+### Crop An Image To A Drawn ROI
+
+Use Napari Labels to draw a freehand or polygonal ROI, then let `Mask Image`
+apply it and reduce the image to its tight rectangular bounds:
+
+1. Create a 2D maximum-intensity projection (MIP) of the image when drawing a
+   3D stack in XY.
+2. Add a Napari Labels layer with the same Y/X grid and draw one solid ROI.
+3. Add a second `Image Source` node and select that Labels layer.
+4. Connect the original image to the `Image` port and the Labels source to the
+   `Mask` port of `Mask Image`.
+5. Enable `Crop image to mask`.
+
+For polygon drawing, select the 2D `VIPP Inspect` layer and create Napari's new
+Shapes layer. VIPP recognizes the resulting `VIPP Inspect - Shapes` source and
+rasterizes it on the Inspect layer's pixel grid. If that reference has leading
+time or channel axes, VIPP ignores them and applies the drawn YX mask across
+every time point and channel.
+
+A YX mask applies through every Z, T, and C position and crops only Y/X. A ZYX
+mask crops Z/Y/X while leaving T/C intact. The ROI must be a Boolean or integer
+binary mask containing background 0 and one positive foreground value. It must
+also be one connected region without enclosed holes. Pixels inside the crop's
+rectangle but outside a non-rectangular ROI receive `Outside value`.
+
 ### Composite → RGB
 
 `Composite → RGB` converts one explicitly identified source-channel axis into a

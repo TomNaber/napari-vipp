@@ -963,6 +963,50 @@ def test_exported_mask_uses_per_source_semantics_for_broadcasting():
         namespace["run_pipeline"](image, mask)
 
 
+def test_exported_mask_preserves_spatial_roi_cropping():
+    pipeline = PrototypePipeline()
+    pipeline.reset_empty_graph()
+    mask_source = pipeline.add_node("input")
+    masked = pipeline.add_node("mask_image")
+    pipeline.set_param(masked.id, "outside_value", -5)
+    pipeline.set_param(masked.id, "crop_image_to_mask", True)
+    pipeline.connect("input", masked.id, target_port=0)
+    pipeline.connect(mask_source.id, masked.id, target_port=1)
+    image = np.arange(2 * 3 * 6 * 7, dtype=np.int16).reshape(2, 3, 6, 7)
+    mask = np.zeros((6, 7), dtype=np.uint8)
+    mask[1:5, 2:4] = 3
+    mask[3:5, 2:6] = 3
+
+    native = pipeline.run(
+        image,
+        input_metadata={"axes": "TZYX"},
+        source_payloads={
+            mask_source.id: SourcePayload(mask, {"axes": "YX"}),
+        },
+    )[masked.id]
+    code = export_pipeline_to_python(pipeline)
+    namespace: dict[str, object] = {"__name__": "exported_pipeline"}
+    exec(compile(code, "<exported>", "exec"), namespace)
+
+    results = namespace["run_pipeline"](
+        image,
+        mask,
+        input_metadata={"axes": "TZYX"},
+        source_metadata={mask_source.id: {"axes": "YX"}},
+    )
+
+    assert '"crop_image_to_mask":true' in code
+    np.testing.assert_array_equal(results[masked.id], native)
+    assert results[masked.id].shape == (2, 3, 4, 4)
+    assert results.image_states[masked.id].axis_order == "TZYX"
+    assert [axis.translation for axis in results.image_states[masked.id].axes] == [
+        0,
+        0,
+        1,
+        2,
+    ]
+
+
 def test_exported_multi_source_call_rejects_a_missing_binding():
     pipeline = PrototypePipeline()
     pipeline.reset_empty_graph()

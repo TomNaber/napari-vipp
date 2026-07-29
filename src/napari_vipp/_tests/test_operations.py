@@ -1794,20 +1794,21 @@ def test_pipeline_mask_image_uses_named_image_and_mask_ports():
     input_ports = pipeline.input_ports(masked.id)
     assert [port.name for port in input_ports] == ["image", "mask"]
     assert [port.label for port in input_ports] == ["Image", "Mask"]
-    assert [port.input_type for port in input_ports] == ["image", "mask_or_labels"]
+    assert [port.input_type for port in input_ports] == ["image", "array"]
     assert "input_count" not in pipeline.nodes[masked.id].params
+    assert pipeline.nodes[masked.id].params["crop_image_to_mask"] is False
 
     pipeline.connect("input", threshold.id)
     image_result = pipeline.connect("input", masked.id, target_port=0)
+    labels_source_result = pipeline.connect("input", masked.id, target_port=1)
     mask_result = pipeline.connect(threshold.id, masked.id, target_port=1)
-    bad_result = pipeline.connect("input", masked.id, target_port=1)
 
     outputs = pipeline.run(data, input_metadata={"axes": "YX"})
     output = outputs[masked.id]
 
     assert image_result.success
+    assert labels_source_result.success
     assert mask_result.success
-    assert not bad_result.success
     assert output.dtype == data.dtype
     assert output[0, 0] == -1
     assert output[2, 3] == 10
@@ -4896,6 +4897,132 @@ def test_mask_image_rejects_non_broadcastable_mask_shape():
 
     with pytest.raises(ValueError, match="explicit semantic mask axis mapping"):
         mask_image([image, mask])
+
+
+def test_mask_image_crops_a_concave_integer_roi_without_mutating_inputs():
+    image = np.arange(7 * 8, dtype=np.uint16).reshape(7, 8)
+    mask = np.zeros((7, 8), dtype=np.uint16)
+    mask[1:6, 2:4] = 7
+    mask[4:6, 2:7] = 7
+    original_image = image.copy()
+    original_mask = mask.copy()
+
+    cropped = mask_image(
+        [image, mask],
+        outside_value=99,
+        crop_image_to_mask=True,
+    )
+
+    expected = image[1:6, 2:7].copy()
+    expected[mask[1:6, 2:7] == 0] = 99
+    np.testing.assert_array_equal(cropped, expected)
+    np.testing.assert_array_equal(image, original_image)
+    np.testing.assert_array_equal(mask, original_mask)
+    assert cropped.shape == (5, 5)
+    assert cropped.dtype == image.dtype
+    assert cropped.flags.c_contiguous
+
+
+def test_mask_image_crop_uses_full_foreground_connectivity():
+    image = np.arange(16, dtype=np.int16).reshape(4, 4)
+    mask = np.zeros((4, 4), dtype=bool)
+    mask[1, 1] = True
+    mask[2, 2] = True
+
+    cropped = mask_image(
+        [image, mask],
+        outside_value=-1,
+        crop_image_to_mask=True,
+    )
+
+    np.testing.assert_array_equal(
+        cropped,
+        np.array([[5, -1], [-1, 10]], dtype=np.int16),
+    )
+
+
+def test_mask_image_crops_yx_only_when_broadcast_over_tczyx():
+    image = np.arange(2 * 3 * 4 * 6 * 7, dtype=np.int32).reshape(2, 3, 4, 6, 7)
+    mask = np.zeros((6, 7), dtype=bool)
+    mask[1:5, 2:6] = True
+    mask[1, 5] = False
+
+    cropped = mask_image(
+        [image, mask],
+        outside_value=-8,
+        crop_image_to_mask=True,
+        mask_axis_mapping=(3, 4),
+    )
+
+    expected = image[:, :, :, 1:5, 2:6].copy()
+    expected[..., mask[1:5, 2:6] == 0] = -8
+    np.testing.assert_array_equal(cropped, expected)
+    assert cropped.shape == (2, 3, 4, 4, 4)
+    assert cropped.flags.c_contiguous
+
+
+def test_mask_image_crops_zyx_only_when_broadcast_over_tczyx():
+    image = np.arange(2 * 3 * 5 * 6 * 7, dtype=np.int32).reshape(2, 3, 5, 6, 7)
+    mask = np.zeros((5, 6, 7), dtype=np.uint8)
+    mask[1:4, 2:5, 3:6] = 1
+
+    cropped = mask_image(
+        [image, mask],
+        crop_image_to_mask=True,
+        mask_axis_mapping=(2, 3, 4),
+    )
+
+    np.testing.assert_array_equal(cropped, image[:, :, 1:4, 2:5, 3:6])
+    assert cropped.shape == (2, 3, 3, 3, 3)
+
+
+@pytest.mark.parametrize(
+    ("mask", "message"),
+    [
+        (np.zeros((4, 4), dtype=np.uint8), "non-empty binary ROI"),
+        (np.ones((4, 4), dtype=np.uint8), "background 0"),
+        (
+            np.array([[0, 1], [2, 2]], dtype=np.uint8),
+            "exactly one positive foreground value",
+        ),
+        (
+            np.array([[1, 0, 0], [0, 0, 0], [0, 0, 1]], dtype=np.uint8),
+            "disconnected components",
+        ),
+        (
+            np.array(
+                [
+                    [1, 1, 1],
+                    [1, 0, 1],
+                    [1, 1, 1],
+                ],
+                dtype=np.uint8,
+            ),
+            "enclosed holes or cavities",
+        ),
+        (np.array([[0.0, 1.0]], dtype=np.float32), "Boolean or integer"),
+        (np.array([0, 1], dtype=np.uint8), "YX or ZYX"),
+        (np.zeros((2, 2, 2, 2), dtype=np.uint8), "YX or ZYX"),
+    ],
+)
+def test_mask_image_crop_rejects_invalid_rois(mask, message):
+    image = np.ones(mask.shape, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match=message):
+        mask_image([image, mask], crop_image_to_mask=True)
+
+
+def test_mask_image_crop_rejects_inversion():
+    image = np.ones((4, 4), dtype=np.uint8)
+    mask = np.zeros((4, 4), dtype=bool)
+    mask[1:3, 1:3] = True
+
+    with pytest.raises(ValueError, match="cannot crop an inverted mask"):
+        mask_image(
+            [image, mask],
+            crop_image_to_mask=True,
+            invert_mask="yes",
+        )
 
 
 def test_logical_nodes_combine_masks():

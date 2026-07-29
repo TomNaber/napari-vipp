@@ -419,6 +419,99 @@ def validate_mask_broadcast_image_states(
     return compatibility.mask_to_image_axes
 
 
+def validate_spatial_mask_crop_image_states(
+    image_state: ImageState,
+    mask_state: ImageState,
+    *,
+    operation_title: str = "Mask Image",
+) -> tuple[int, ...]:
+    """Map a positional YX/ZYX ROI mask onto matching image spatial axes."""
+    image = ImageGrid.from_image_state(image_state)
+    mask = ImageGrid.from_image_state(mask_state)
+    expected_names = {2: ("y", "x"), 3: ("z", "y", "x")}.get(
+        len(mask.axes)
+    )
+    if expected_names is None:
+        raise ValueError(
+            f"{operation_title} cropping requires a 2D YX or 3D ZYX mask; "
+            f"received a {len(mask.axes)}D mask."
+        )
+
+    issues: list[GridIssue] = []
+    mapping: list[int] = []
+    for mask_index, expected_name in enumerate(expected_names):
+        mask_axis = mask.axes[mask_index]
+        if mask_axis.explicit and (
+            mask_axis.name != expected_name or mask_axis.type != "space"
+        ):
+            issues.append(
+                GridIssue(
+                    "axis_semantics",
+                    f"Mask axis {mask_index} must be {expected_name}:space, "
+                    f"not {_semantics(mask_axis)!r}",
+                )
+            )
+            continue
+
+        matches = [
+            image_index
+            for image_index, image_axis in enumerate(image.axes)
+            if image_axis.name == expected_name and image_axis.type == "space"
+        ]
+        if not matches:
+            issues.append(
+                GridIssue(
+                    "axis_semantics",
+                    f"Image has no unique {expected_name}:space axis for Mask "
+                    f"axis {mask_index}",
+                )
+            )
+            continue
+        if len(matches) > 1:
+            issues.append(
+                GridIssue(
+                    "ambiguous_axis",
+                    f"Image has multiple {expected_name}:space axes {matches}",
+                )
+            )
+            continue
+
+        image_index = matches[0]
+        image_axis = image.axes[image_index]
+        mapping.append(image_index)
+        image_label = _axis_label(image_axis, image_index)
+        if mask_axis.size != image_axis.size:
+            issues.append(
+                GridIssue(
+                    "axis_size",
+                    f"{image_label} sizes differ ({image_axis.size} versus "
+                    f"{mask_axis.size})",
+                )
+            )
+        issues.extend(
+            _axis_calibration_issues(
+                image_axis,
+                mask_axis,
+                axis_label=image_label,
+                compare_translation=True,
+            )
+        )
+
+    compatibility = GridCompatibility(tuple(issues))
+    if not compatibility.compatible:
+        _raise_grid_error(
+            operation_title,
+            "Image",
+            "Mask",
+            compatibility,
+            remedy=(
+                "Use a YX or ZYX Labels layer created from the aligned image "
+                "or projection; VIPP does not resample ROI masks implicitly."
+            ),
+        )
+    return tuple(mapping)
+
+
 def validate_psf_image_states(
     image_state: ImageState,
     psf_state: ImageState,

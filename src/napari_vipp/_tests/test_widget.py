@@ -112,6 +112,7 @@ from napari_vipp.core.metadata import (
 from napari_vipp.core.operations import (
     NO_TABLE_COLUMNS_VALUE,
     automatic_threshold_value,
+    mask_image,
 )
 from napari_vipp.core.pipeline import (
     EXECUTION_BLOCKED,
@@ -465,6 +466,21 @@ def test_numeric_parameter_context_menu_resets_to_default(qtbot):
             spec.default
         )
         menu.deleteLater()
+
+
+def test_mask_image_crop_parameter_renders_as_a_checkbox(qtbot, monkeypatch):
+    widget = VippWidget(_Viewer(np.ones((8, 8), dtype=np.float32)))
+    qtbot.addWidget(widget)
+    monkeypatch.setattr(widget, "run_pipeline", lambda: None)
+    node = widget.add_node_from_palette("mask_image")
+    widget.graph_view.select_node(node.id)
+
+    control = widget._parameter_widgets["crop_image_to_mask"]
+    assert control.checkbox.isChecked() is False
+
+    control.checkbox.click()
+
+    assert widget.pipeline.nodes[node.id].params["crop_image_to_mask"] is True
 
 
 def test_histogram_plot_dragging_marker_emits_histogram_value(qtbot):
@@ -916,6 +932,141 @@ def test_live_napari_source_uses_one_owned_read_only_revision(qtbot):
     np.testing.assert_array_equal(source_output, expected)
 
 
+def test_live_shapes_source_rasterizes_on_its_inspect_reference_grid(qtbot):
+    data = np.arange(8 * 9, dtype=np.uint16).reshape(8, 9)
+    viewer = _Viewer(data, metadata={"axes": "YX"})
+    widget = VippWidget(viewer)
+    qtbot.addWidget(widget)
+    widget.inspect_node("input")
+    reference = viewer.layers["VIPP Inspect"]
+    labels = np.zeros(data.shape, dtype=np.uint8)
+    labels[2:6, 3:7] = 1
+    requested_shapes = []
+    shapes = _Layer(
+        [np.array([[2, 3], [2, 7], [6, 7], [6, 3]], dtype=float)],
+        "VIPP Inspect - Shapes",
+        layer_type="shapes",
+    )
+    shapes.ndim = 2
+    shapes.scale = reference.scale
+    shapes.to_labels = lambda shape: requested_shapes.append(tuple(shape)) or labels
+    viewer.layers.append(shapes)
+    source = widget.pipeline.add_node("input")
+    source.params.update(
+        source_mode="napari layer",
+        layer_name=shapes.name,
+    )
+
+    payload, selected_layer = widget._resolve_source_payload(source)
+
+    assert payload is not None
+    assert selected_layer is shapes
+    assert requested_shapes == [data.shape]
+    assert payload.data.shape == data.shape
+    assert not payload.data.flags.writeable
+    assert payload.image_state is not None
+    assert payload.image_state.axis_order == "YX"
+    assert payload.image_state.source_name == shapes.name
+    cropped = mask_image([data, payload.data], crop_image_to_mask=True)
+    np.testing.assert_array_equal(cropped, data[2:6, 3:7])
+
+    reference.data = np.zeros((3, *data.shape), dtype=np.uint16)
+    reference.metadata = {"axes": "ZYX"}
+    refreshed_payload, selected_layer = widget._resolve_source_payload(source)
+
+    assert refreshed_payload is not None
+    assert selected_layer is shapes
+    assert requested_shapes == [data.shape, data.shape]
+    assert refreshed_payload.image_state is not None
+    assert refreshed_payload.image_state.axis_order == "YX"
+    refreshed_crop = mask_image(
+        [data, refreshed_payload.data], crop_image_to_mask=True
+    )
+    np.testing.assert_array_equal(refreshed_crop, data[2:6, 3:7])
+
+
+@pytest.mark.parametrize(
+    ("reference_axes", "reference_shape"),
+    (("TYX", (2, 8, 9)), ("CYX", (3, 8, 9)), ("TCYX", (2, 3, 8, 9))),
+)
+def test_live_shapes_source_ignores_reference_time_and_channel_axes(
+    qtbot,
+    reference_axes,
+    reference_shape,
+):
+    reference_data = np.zeros(reference_shape, dtype=np.uint16)
+    viewer = _Viewer(reference_data, metadata={"axes": reference_axes})
+    widget = VippWidget(viewer)
+    qtbot.addWidget(widget)
+    widget.inspect_node("input")
+    labels = np.zeros(reference_shape[-2:], dtype=np.uint8)
+    labels[2:6, 3:7] = 1
+    requested_shapes = []
+    leading = np.ones((4, len(reference_shape) - 2), dtype=float)
+    vertices = np.concatenate(
+        (
+            leading,
+            np.array([[2, 3], [2, 7], [6, 7], [6, 3]], dtype=float),
+        ),
+        axis=1,
+    )
+    shapes = _Layer(
+        [vertices],
+        "VIPP Inspect - Shapes",
+        layer_type="shapes",
+    )
+    shapes.ndim = len(reference_shape)
+    shapes.scale = (1.0,) * shapes.ndim
+    shapes.translate = (0.0,) * shapes.ndim
+    shapes.rotate = np.eye(shapes.ndim)
+    shapes.shear = np.zeros(shapes.ndim)
+    shapes.affine = np.eye(shapes.ndim + 1)
+    shapes.units = ("pixel",) * shapes.ndim
+    shapes.axis_labels = tuple(reference_axes.lower())
+    shapes.to_labels = lambda shape: requested_shapes.append(tuple(shape)) or labels
+    viewer.layers.append(shapes)
+    source = widget.pipeline.add_node("input")
+    source.params.update(source_mode="napari layer", layer_name=shapes.name)
+
+    payload, selected_layer = widget._resolve_source_payload(source)
+
+    assert payload is not None
+    assert selected_layer is shapes
+    assert requested_shapes == [reference_shape[-2:]]
+    assert payload.data.shape == reference_shape[-2:]
+    assert payload.image_state is not None
+    assert payload.image_state.axis_order == "YX"
+
+    image = np.arange(2 * 3 * 4 * 8 * 9, dtype=np.uint16).reshape(2, 3, 4, 8, 9)
+    image_state = image_state_from_array(
+        image,
+        axes=(
+            AxisMetadata("t", "time"),
+            AxisMetadata("c", "channel"),
+            AxisMetadata("z", "space"),
+            AxisMetadata("y", "space"),
+            AxisMetadata("x", "space"),
+        ),
+    )
+    pipeline = PrototypePipeline()
+    pipeline.reset_empty_graph()
+    mask_source = pipeline.add_node("input")
+    masked = pipeline.add_node("mask_image")
+    pipeline.set_param(masked.id, "crop_image_to_mask", True)
+    assert pipeline.connect("input", masked.id, target_port=0).success
+    assert pipeline.connect(mask_source.id, masked.id, target_port=1).success
+
+    output = pipeline.run(
+        image,
+        source_payloads={
+            "input": SourcePayload(image, image_state=image_state),
+            mask_source.id: payload,
+        },
+    )[masked.id]
+
+    np.testing.assert_array_equal(output, image[:, :, :, 2:6, 3:7])
+
+
 def test_live_source_data_event_advances_revision_and_recalculates(qtbot):
     original = np.arange(20, dtype=np.uint16).reshape(4, 5)
     viewer = _Viewer(original, metadata={"axes": "YX"})
@@ -937,6 +1088,51 @@ def test_live_source_data_event_advances_revision_and_recalculates(qtbot):
     assert not np.shares_memory(updated, replacement)
     assert not updated.flags.writeable
     np.testing.assert_array_equal(updated, replacement)
+
+
+def test_unconnected_live_source_previews_metadata_and_updates(qtbot):
+    viewer = _Viewer(np.zeros((8, 9), dtype=np.uint8), metadata={"axes": "YX"})
+    live_data = np.zeros((2, 8, 9), dtype=np.uint8)
+    live_data[:, 2:6, 3:7] = 1
+    layer = _Layer(
+        live_data,
+        "live channel mask",
+        metadata={"axes": "CYX"},
+        layer_type="labels",
+    )
+    viewer.layers.append(layer)
+    widget = VippWidget(viewer)
+    qtbot.addWidget(widget)
+
+    source = widget.add_node_from_palette("input")
+    control = widget._parameter_widgets["image_source"]
+    control.layer_combo.setCurrentText(layer.name)
+
+    qtbot.waitUntil(
+        lambda: np.array_equal(widget.pipeline.outputs.get(source.id), live_data),
+        timeout=5000,
+    )
+    assert not any(
+        connection.source_id == source.id
+        for connection in widget.pipeline.connections
+    )
+    card = widget.graph_view._cards[source.id]
+    assert "CYX: 2 x 8 x 9 | uint8" in card.metadata_label.text()
+    assert card.preview.pixmap() is not None
+    assert not card.preview.pixmap().isNull()
+    assert {
+        name for name in widget._parameter_widgets if name.startswith("channel_color_")
+    } == {"channel_color_0", "channel_color_1"}
+
+    replacement = np.zeros_like(live_data)
+    replacement[:, 1:4, 2:5] = 1
+    layer.data = replacement
+    layer.events.data.emit()
+
+    qtbot.waitUntil(
+        lambda: np.array_equal(widget.pipeline.outputs.get(source.id), replacement),
+        timeout=5000,
+    )
 
 
 def test_explicit_refresh_captures_direct_live_array_mutation(qtbot):

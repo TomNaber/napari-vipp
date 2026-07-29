@@ -17,6 +17,7 @@ from napari_vipp.core.grid import (
     validate_aligned_image_states,
     validate_mask_broadcast_image_states,
     validate_psf_image_states,
+    validate_spatial_mask_crop_image_states,
 )
 from napari_vipp.core.metadata import (
     DEFERRED_VALUE_RANGE,
@@ -142,6 +143,7 @@ from napari_vipp.core.operations import (
     top_hat,
     triangle_threshold,
     unsharp_mask_filter,
+    validated_mask_crop,
     yen_threshold,
 )
 from napari_vipp.core.progress import ProgressContext
@@ -4419,12 +4421,25 @@ NODE_LIBRARY: tuple[OperationSpec, ...] = (
                 1,
                 choices=("no", "yes"),
             ),
+            ParameterSpec(
+                "crop_image_to_mask",
+                "Crop image to mask",
+                "bool",
+                False,
+                0,
+                1,
+                1,
+                tooltip=(
+                    "Crop spatial axes to the tight bounding box of one "
+                    "connected, hole-free binary ROI."
+                ),
+            ),
         ),
         mask_image,
         max_inputs=2,
         inputs=(
             InputSpec("image", "image", "Image"),
-            InputSpec("mask", "mask_or_labels", "Mask"),
+            InputSpec("mask", "array", "Mask"),
         ),
         subcategory=MATH_LOGIC_GROUP,
     ),
@@ -4942,6 +4957,9 @@ NODE_LIBRARY: tuple[OperationSpec, ...] = (
 )
 
 NODE_LIBRARY_BY_ID = {spec.id: spec for spec in NODE_LIBRARY}
+_BACKWARD_COMPATIBLE_PARAMETER_DEFAULTS: dict[str, dict[str, Any]] = {
+    "mask_image": {"crop_image_to_mask": False},
+}
 _RESOLVED_SPATIAL_PARAMETER_OPERATION_IDS = frozenset(
     spec.id
     for spec in NODE_LIBRARY
@@ -4972,8 +4990,12 @@ def graph_node_from_persisted_params(
     if not isinstance(saved_params, dict):
         raise ValueError(f"Parameters for node {node_id!r} must be an object.")
 
+    params = {
+        **_BACKWARD_COMPATIBLE_PARAMETER_DEFAULTS.get(spec.id, {}),
+        **saved_params,
+    }
     required_params = {parameter.name for parameter in spec.parameters}
-    missing_params = required_params - saved_params.keys()
+    missing_params = required_params - params.keys()
     if missing_params:
         missing = ", ".join(sorted(missing_params))
         raise ValueError(
@@ -4997,7 +5019,6 @@ def graph_node_from_persisted_params(
 
     # Keep this shallow copy for the established deserializer contract. Runtime
     # snapshots pass a defensive deep copy into this shared validator.
-    params = dict(saved_params)
     for parameter in spec.parameters:
         validate_parameter_value(
             parameter,
@@ -7014,6 +7035,13 @@ class PrototypePipeline:
                         axis.type for axis in labels_state.axes
                     )
             self._validate_multi_input_grids(node, input_states, kwargs)
+            if (
+                node.operation_id == "mask_image"
+                and kwargs.get("crop_image_to_mask", False)
+                and len(source_outputs) >= 2
+            ):
+                _mask, bounds = validated_mask_crop(source_outputs[1])
+                kwargs["mask_crop_bounds"] = bounds
             self._sync_colocalization_costes_thresholds(
                 node,
                 source_outputs,
@@ -7230,10 +7258,13 @@ class PrototypePipeline:
                 and isinstance(input_states[0], ImageState)
                 and isinstance(input_states[1], ImageState)
             ):
-                kwargs["mask_axis_mapping"] = validate_mask_broadcast_image_states(
-                    input_states[0],
-                    input_states[1],
-                    operation_title=node.title,
+                validator = (
+                    validate_spatial_mask_crop_image_states
+                    if kwargs.get("crop_image_to_mask", False)
+                    else validate_mask_broadcast_image_states
+                )
+                kwargs["mask_axis_mapping"] = validator(
+                    input_states[0], input_states[1], operation_title=node.title
                 )
             return
 

@@ -380,6 +380,25 @@ def test_current_scientific_workflow_parameters_are_required(
         deserialize_workflow(document)
 
 
+def test_mask_crop_parameter_serializes_and_old_workflows_default_it_off():
+    pipeline = PrototypePipeline()
+    masked = pipeline.add_node("mask_image")
+    assert pipeline.nodes[masked.id].params["crop_image_to_mask"] is False
+    pipeline.set_param(masked.id, "crop_image_to_mask", True)
+    document = serialize_workflow(pipeline)
+    serialized = next(item for item in document["nodes"] if item["id"] == masked.id)
+
+    assert serialized["params"]["crop_image_to_mask"] is True
+    restored = deserialize_workflow(document)
+    restored_node = next(node for node in restored["nodes"] if node.id == masked.id)
+    assert restored_node.params["crop_image_to_mask"] is True
+
+    serialized["params"].pop("crop_image_to_mask")
+    legacy = deserialize_workflow(document)
+    legacy_node = next(node for node in legacy["nodes"] if node.id == masked.id)
+    assert legacy_node.params["crop_image_to_mask"] is False
+
+
 @pytest.mark.parametrize(
     ("operation_id", "parameter", "value", "message"),
     [
