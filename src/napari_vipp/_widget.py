@@ -4548,6 +4548,11 @@ class VippWidget(QWidget):
                 path, **values
             ),
             preview_item=self._preview_interactive_collection_batch_item,
+            plan_batch=lambda values, preview_limit: self._preview_collection_batch(
+                **values,
+                preview_limit=preview_limit,
+                activate_representative=False,
+            ),
         )
 
     def _choose_collection_batch_demo(
@@ -5224,6 +5229,7 @@ class VippWidget(QWidget):
         preview_limit: int = 25,
         existing_file_policy: str = ExistingFilePolicy.ERROR.value,
         continue_on_error: bool = True,
+        activate_representative: bool = True,
     ) -> BatchPreviewResult:
         result = self._collection_batch_controller.preview(
             input_dir=input_dir,
@@ -5240,7 +5246,7 @@ class VippWidget(QWidget):
         config_path = None
         if self._active_collection_batch_dialog is not None:
             config_path = self._active_collection_batch_dialog._loaded_config_path
-        if result.items and result.config is not None:
+        if activate_representative and result.items and result.config is not None:
             self._activate_interactive_collection_batch(
                 result.items,
                 result.config,

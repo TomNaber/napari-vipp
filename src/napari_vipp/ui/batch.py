@@ -101,6 +101,7 @@ class CollectionBatchActions:
     load_config: LoadBatchConfigAction
     save_config: SaveBatchConfigAction
     preview_item: PreviewBatchItemAction | None = None
+    plan_batch: PreviewBatchAction | None = None
 
 
 class CollectionBatchDialog(QDialog):
@@ -125,6 +126,7 @@ class CollectionBatchDialog(QDialog):
         self._demo: SyntheticBatchDemo | None = None
         self._preview_result: BatchPreviewResult | None = None
         self._preview_table_rows: dict[int, int] = {}
+        self._preview_items_activated = False
         self._run_control_enabled_states: dict[QWidget, bool] | None = None
         self._run_in_progress = False
         self._output_path_is_suggested = True
@@ -135,6 +137,10 @@ class CollectionBatchDialog(QDialog):
         self._run_control_restore_timer.timeout.connect(
             self._restore_deferred_run_controls
         )
+        self._auto_preview_timer = QTimer(self)
+        self._auto_preview_timer.setSingleShot(True)
+        self._auto_preview_timer.setInterval(300)
+        self._auto_preview_timer.timeout.connect(self._auto_preview_batch)
 
         source_nodes = source_nodes or [
             {
@@ -266,13 +272,14 @@ class CollectionBatchDialog(QDialog):
         help_label = QLabel(
             "Bind each Image Source that should change per batch item to a "
             "folder and file pattern. VIPP zips bound sources by sorted file "
-            "order and assigns each row a stable batch ID. Preview batch is "
-            "optional: it plans the complete collection and calculates the "
-            "first row only as a representative graph view. Preview selected "
-            "in graph changes that single representative. Run batch performs a "
-            "fresh preflight, processes the full plan immediately, and saves "
-            "only Batch Output nodes when present. Without Batch Output nodes, "
-            "terminal graph outputs are saved as a compatibility fallback."
+            "order and assigns each row a stable batch ID. The table refreshes "
+            "automatically after folder or pattern changes. Preview batch "
+            "additionally calculates the first row as a representative graph "
+            "view; Preview selected in graph changes that single "
+            "representative. Run batch performs a fresh preflight, processes "
+            "the full plan immediately, and saves only Batch Output nodes when "
+            "present. Without Batch Output nodes, terminal graph outputs are "
+            "saved as a compatibility fallback."
         )
         help_label.setWordWrap(True)
         help_label.setMinimumWidth(0)
@@ -391,9 +398,9 @@ class CollectionBatchDialog(QDialog):
         self.script_checkbox.toggled.connect(self._invalidate_preview_plan)
         self.continue_checkbox.toggled.connect(self._invalidate_preview_plan)
         self.preview_status.setText(
-            "Configure the collections, then Run batch. Preview batch is optional "
-            "and lets you inspect the full plan plus one graph representative "
-            "without saving batch outputs."
+            "Choose the collection folders and patterns to populate the table "
+            "automatically. Preview batch additionally loads one graph "
+            "representative without saving batch outputs."
         )
 
         screen = self.screen()
@@ -500,7 +507,7 @@ class CollectionBatchDialog(QDialog):
         folder_edit.textChanged.connect(
             lambda text, edit=folder_edit: self._source_folder_changed(edit, text)
         )
-        pattern_edit.textChanged.connect(self._invalidate_preview_plan)
+        pattern_edit.textChanged.connect(self._source_pattern_changed)
         title_label = QLabel(
             f"{title} ({node_id})"
             + ("  - collection" if binding_mode == "collection" else "")
@@ -557,6 +564,31 @@ class CollectionBatchDialog(QDialog):
         ):
             self._refresh_suggested_output_path()
         self._invalidate_preview_plan()
+        self._schedule_auto_preview()
+
+    def _source_pattern_changed(self, _text: str) -> None:
+        self._invalidate_preview_plan()
+        self._schedule_auto_preview()
+
+    def _schedule_auto_preview(self) -> None:
+        if (
+            self._run_in_progress
+            or self._actions is None
+            or self._actions.plan_batch is None
+        ):
+            return
+        ready = bool(self._source_rows) and all(
+            row["folder"].text().strip() and row["pattern"].text().strip()
+            for row in self._source_rows
+        )
+        if not ready:
+            self.preview_status.setText(
+                "Choose a folder and pattern for every batch source to populate "
+                "the table automatically."
+            )
+            return
+        self.preview_status.setText("Planning batch items...")
+        self._auto_preview_timer.start()
 
     def _refresh_suggested_output_path(self) -> None:
         if not self._output_path_is_suggested:
@@ -639,15 +671,18 @@ class CollectionBatchDialog(QDialog):
         """Request execution without accepting or hiding this workspace."""
         if self._run_in_progress:
             return
+        self._auto_preview_timer.stop()
         self.runRequested.emit(self.values())
 
     def _invalidate_preview_plan(self, *_args) -> None:
         """Discard a plan as soon as any setting that produced it changes."""
         if self._run_in_progress:
             return
+        self._auto_preview_timer.stop()
         self.clear_demo_context()
         self._loaded_config_path = None
         self._preview_result = None
+        self._preview_items_activated = False
         self._preview_table_rows.clear()
         self.preview_table.setRowCount(0)
         self.preview_item_button.setEnabled(False)
@@ -736,6 +771,7 @@ class CollectionBatchDialog(QDialog):
         has_selection = bool(self.preview_table.selectionModel().selectedRows())
         self.preview_item_button.setEnabled(
             action_available
+            and self._preview_items_activated
             and self._preview_result is not None
             and has_selection
             and not self._run_in_progress
@@ -849,6 +885,7 @@ class CollectionBatchDialog(QDialog):
         self._preview_selected_item()
 
     def _preview_batch(self) -> bool:
+        self._auto_preview_timer.stop()
         if self._actions is None:
             self.preview_status.setText("Preview is available from the VIPP widget.")
             return False
@@ -869,14 +906,41 @@ class CollectionBatchDialog(QDialog):
         self.apply_preview_result(result, preview_representative=True)
         return True
 
+    def _auto_preview_batch(self) -> None:
+        if (
+            self._run_in_progress
+            or self._actions is None
+            or self._actions.plan_batch is None
+        ):
+            return
+        try:
+            result = self._actions.plan_batch(self.values(), 25)
+        except Exception as exc:
+            self._preview_result = None
+            self._preview_table_rows.clear()
+            self.preview_table.setRowCount(0)
+            self.preview_item_button.setEnabled(False)
+            self.preview_status.setText(f"Could not plan batch items: {exc}")
+            self.graph_preview_status.setText(
+                "Fix the batch source folders or patterns to refresh the table."
+            )
+            return
+        self.apply_preview_result(
+            result,
+            preview_representative=False,
+            preview_items_activated=False,
+        )
+
     def apply_preview_result(
         self,
         result: BatchPreviewResult,
         *,
         preview_representative: bool,
+        preview_items_activated: bool = True,
     ) -> None:
         """Display one validated plan, optionally calculating a graph sample."""
         self._preview_result = result
+        self._preview_items_activated = preview_items_activated
         self._reset_run_display()
         self._preview_table_rows = {
             item.batch_index: row_index for row_index, item in enumerate(result.rows)
@@ -931,8 +995,7 @@ class CollectionBatchDialog(QDialog):
             )
         else:
             messages.append(
-                "No graph representative was calculated; this fresh plan is "
-                "ready for the requested full run."
+                "The table is current. No graph representative was calculated."
             )
         if collision_count:
             messages.append(f"{collision_count} collision(s) need attention.")
@@ -962,10 +1025,16 @@ class CollectionBatchDialog(QDialog):
                     "The full plan is ready. Representative graph preview is "
                     "unavailable in this context."
                 )
-            else:
+            elif preview_items_activated:
                 self.graph_preview_status.setText(
                     "Run preflight is ready. No representative was loaded into "
                     "the graph; use Preview selected in graph later if desired."
+                )
+            else:
+                self.graph_preview_status.setText(
+                    "The table updated automatically. Click Preview batch to "
+                    "activate the current plan and load its first graph "
+                    "representative."
                 )
         else:
             self.graph_preview_status.setText(
@@ -1270,6 +1339,7 @@ class CollectionBatchDialog(QDialog):
         self.workflow_checkbox.setChecked(True)
         self.script_checkbox.setChecked(config.save_python_script)
         self.continue_checkbox.setChecked(config.continue_on_error)
+        self._schedule_auto_preview()
 
     def _browse_input(self) -> None:
         path = QFileDialog.getExistingDirectory(
