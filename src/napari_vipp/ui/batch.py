@@ -80,7 +80,7 @@ class BatchPreviewResult:
 
 
 BatchDialogValues = dict[str, object]
-PreviewBatchAction = Callable[[BatchDialogValues, int], BatchPreviewResult]
+PreviewBatchAction = Callable[[BatchDialogValues, int | None], BatchPreviewResult]
 PreviewBatchItemAction = Callable[[int], bool | None]
 ChooseBatchDemoAction = Callable[[QWidget], SyntheticBatchDemo | None]
 BatchSourceRowsAction = Callable[[], list[dict[str, str]]]
@@ -126,9 +126,13 @@ class CollectionBatchDialog(QDialog):
         self._demo: SyntheticBatchDemo | None = None
         self._preview_result: BatchPreviewResult | None = None
         self._preview_table_rows: dict[int, int] = {}
+        self._preview_table_batch_ids: dict[str, int] = {}
         self._preview_items_activated = False
+        self._preview_status_base: tuple[str, ...] = ()
+        self._representative_pending = False
         self._run_control_enabled_states: dict[QWidget, bool] | None = None
         self._run_in_progress = False
+        self._run_total = 0
         self._output_path_is_suggested = True
         self._setting_suggested_output = False
         self._run_control_restore_timer = QTimer(self)
@@ -189,7 +193,7 @@ class CollectionBatchDialog(QDialog):
         self.preview_status.setStyleSheet("color: #94a3b8;")
         self.preview_table = QTableWidget(0, 5)
         self.preview_table.setHorizontalHeaderLabels(
-            ["#", "Batch item", "Outputs", "Preflight", "Run status"]
+            ["Process", "Batch item", "Outputs", "Preflight", "Run status"]
         )
         self.preview_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.preview_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -203,9 +207,13 @@ class CollectionBatchDialog(QDialog):
         preview_header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         preview_header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.preview_table.itemSelectionChanged.connect(self._sync_preview_item_button)
+        self.preview_table.itemChanged.connect(self._preview_item_check_changed)
         self.preview_table.itemDoubleClicked.connect(
             self._preview_table_item_double_clicked
         )
+        self.selection_status = QLabel("")
+        self.selection_status.setWordWrap(True)
+        self.selection_status.setStyleSheet("color: #94a3b8;")
 
         self.preview_item_button = QPushButton("Preview selected in graph")
         self.preview_item_button.setToolTip(
@@ -370,6 +378,7 @@ class CollectionBatchDialog(QDialog):
         content_layout.addWidget(help_label)
         content_layout.addWidget(preview_row)
         content_layout.addWidget(self.preview_table)
+        content_layout.addWidget(self.selection_status)
         content_layout.addWidget(graph_preview_row)
         content_layout.addWidget(self.run_group)
 
@@ -391,7 +400,9 @@ class CollectionBatchDialog(QDialog):
         layout.addWidget(self.button_box)
 
         self.output_edit.textChanged.connect(self._output_path_changed)
-        self.format_combo.currentIndexChanged.connect(self._invalidate_preview_plan)
+        self.format_combo.currentIndexChanged.connect(
+            self._planning_setting_changed
+        )
         self.existing_policy_combo.currentIndexChanged.connect(
             self._invalidate_preview_plan
         )
@@ -570,6 +581,10 @@ class CollectionBatchDialog(QDialog):
         self._invalidate_preview_plan()
         self._schedule_auto_preview()
 
+    def _planning_setting_changed(self, *_args) -> None:
+        self._invalidate_preview_plan()
+        self._schedule_auto_preview()
+
     def _schedule_auto_preview(self) -> None:
         if (
             self._run_in_progress
@@ -671,8 +686,95 @@ class CollectionBatchDialog(QDialog):
         """Request execution without accepting or hiding this workspace."""
         if self._run_in_progress:
             return
+        if not self._has_selected_batch_items():
+            self._update_processing_selection()
+            return
         self._auto_preview_timer.stop()
         self.runRequested.emit(self.values())
+
+    def excluded_item_indexes(self) -> frozenset[int]:
+        """Return the one-based plan indexes unchecked in the current table."""
+        excluded: set[int] = set()
+        if self._preview_result is None:
+            return frozenset()
+        for row in range(self.preview_table.rowCount()):
+            item = self.preview_table.item(row, 0)
+            if item is None or item.checkState() == Qt.Checked:
+                continue
+            try:
+                excluded.add(int(item.data(Qt.UserRole)) + 1)
+            except (TypeError, ValueError):
+                continue
+        return frozenset(excluded)
+
+    def _has_selected_batch_items(self) -> bool:
+        if self._preview_result is None:
+            return True
+        return len(self.excluded_item_indexes()) < len(self._preview_result.items)
+
+    def _preview_item_check_changed(self, item: QTableWidgetItem) -> None:
+        if item.column() != 0 or self._preview_result is None:
+            return
+        self._set_table_run_status(
+            item.row(),
+            "Not run" if item.checkState() == Qt.Checked else "Excluded",
+        )
+        self._update_processing_selection()
+
+    def _selected_collision_count(self) -> int:
+        if self._preview_result is None:
+            return 0
+        excluded = self.excluded_item_indexes()
+        return sum(
+            output.duplicate
+            or output.input_collision
+            or (
+                output.exists
+                and output.existing_file_policy == ExistingFilePolicy.ERROR
+            )
+            for item in self._preview_result.items
+            if item.index not in excluded
+            for output in item.outputs
+        )
+
+    def _update_processing_selection(self) -> None:
+        if self._preview_result is None:
+            self.selection_status.clear()
+            self._sync_run_button()
+            return
+        total = len(self._preview_result.items)
+        excluded = len(self.excluded_item_indexes())
+        selected = total - excluded
+        messages = [
+            f"{selected} of {total} item(s) selected for processing; "
+            f"{excluded} excluded."
+        ]
+        if selected == 0:
+            messages.append("Select at least one item to enable Run batch.")
+        self.selection_status.setText(" ".join(messages))
+        preview_messages = list(self._preview_status_base)
+        collisions = self._selected_collision_count()
+        if collisions:
+            preview_messages.append(
+                f"{collisions} collision(s) among selected items need attention."
+            )
+        if preview_messages:
+            self.preview_status.setText(" ".join(preview_messages))
+        self._sync_run_button()
+
+    def _sync_run_button(self) -> None:
+        run_button = getattr(self, "run_button", None)
+        if run_button is None:
+            return
+        has_selection = self._has_selected_batch_items()
+        run_button.setEnabled(
+            not self._run_in_progress
+            and not self._representative_pending
+            and has_selection
+        )
+        run_button.setToolTip(
+            "" if has_selection else "Select at least one batch item to process."
+        )
 
     def _invalidate_preview_plan(self, *_args) -> None:
         """Discard a plan as soon as any setting that produced it changes."""
@@ -683,8 +785,11 @@ class CollectionBatchDialog(QDialog):
         self._loaded_config_path = None
         self._preview_result = None
         self._preview_items_activated = False
+        self._preview_status_base = ()
         self._preview_table_rows.clear()
+        self._preview_table_batch_ids.clear()
         self.preview_table.setRowCount(0)
+        self.selection_status.clear()
         self.preview_item_button.setEnabled(False)
         self.preview_status.setText(
             "Batch settings changed. Run batch will build a fresh plan, or use "
@@ -693,6 +798,7 @@ class CollectionBatchDialog(QDialog):
         self.graph_preview_status.setText(
             "Use Preview batch to select a representative graph item if desired."
         )
+        self._sync_run_button()
         self.previewInvalidated.emit()
 
     def invalidate_for_workflow_change(self) -> None:
@@ -746,18 +852,27 @@ class CollectionBatchDialog(QDialog):
 
     def show_plan_refresh_required(self, message: str) -> None:
         """Explain why a newly refreshed plan must be reviewed before running."""
-        self.preview_status.setText(str(message))
+        self._preview_status_base = (str(message),)
+        self._update_processing_selection()
 
     def set_representative_pending(self, pending: bool) -> None:
         """Keep full execution unavailable until graph preview is trustworthy."""
         if self._run_in_progress:
             return
-        self.run_button.setEnabled(not bool(pending))
+        self._representative_pending = bool(pending)
+        self._sync_run_button()
 
     def mark_plan_historical_after_run(self) -> None:
         """Retain run evidence but require fresh preflight before replay."""
         self._preview_result = None
+        for row in range(self.preview_table.rowCount()):
+            item = self.preview_table.item(row, 0)
+            if item is not None:
+                item.setFlags(item.flags() & ~Qt.ItemIsUserCheckable)
         self.preview_item_button.setEnabled(False)
+        self.selection_status.setText(
+            "The processing selection above belongs to the completed run."
+        )
         self.preview_status.setText(
             "Historical preflight: the column above records the completed "
             "run's plan. Run batch will preflight current inputs and destinations "
@@ -890,12 +1005,16 @@ class CollectionBatchDialog(QDialog):
             self.preview_status.setText("Preview is available from the VIPP widget.")
             return False
         try:
-            result = self._actions.preview_batch(self.values(), 25)
+            result = self._actions.preview_batch(self.values(), None)
         except Exception as exc:
             self.clear_demo_context()
             self._preview_result = None
+            self._preview_items_activated = False
+            self._preview_status_base = ()
             self._preview_table_rows.clear()
+            self._preview_table_batch_ids.clear()
             self.preview_table.setRowCount(0)
+            self.selection_status.clear()
             self.preview_status.setText(f"Preview failed: {exc}")
             self.graph_preview_status.setText(
                 "Representative graph preview requires a valid batch plan."
@@ -914,11 +1033,14 @@ class CollectionBatchDialog(QDialog):
         ):
             return
         try:
-            result = self._actions.plan_batch(self.values(), 25)
+            result = self._actions.plan_batch(self.values(), None)
         except Exception as exc:
             self._preview_result = None
+            self._preview_status_base = ()
             self._preview_table_rows.clear()
+            self._preview_table_batch_ids.clear()
             self.preview_table.setRowCount(0)
+            self.selection_status.clear()
             self.preview_item_button.setEnabled(False)
             self.preview_status.setText(f"Could not plan batch items: {exc}")
             self.graph_preview_status.setText(
@@ -945,10 +1067,21 @@ class CollectionBatchDialog(QDialog):
         self._preview_table_rows = {
             item.batch_index: row_index for row_index, item in enumerate(result.rows)
         }
+        self._preview_table_batch_ids = {
+            item.batch_id: row_index for row_index, item in enumerate(result.rows)
+        }
+        signals_were_blocked = self.preview_table.blockSignals(True)
+        self.preview_table.setEnabled(True)
         self.preview_table.setRowCount(len(result))
         for row_index, item in enumerate(result):
             index_item = QTableWidgetItem(str(item.batch_index))
             index_item.setData(Qt.UserRole, item.batch_index - 1)
+            index_item.setFlags(index_item.flags() | Qt.ItemIsUserCheckable)
+            index_item.setCheckState(Qt.Checked)
+            index_item.setToolTip(
+                "Checked items will be processed; uncheck to exclude this item "
+                "from the batch run."
+            )
             self.preview_table.setItem(row_index, 0, index_item)
             source_text = "\n".join(
                 f"{node_id}: {item.source_labels.get(node_id, path.name)}"
@@ -980,9 +1113,9 @@ class CollectionBatchDialog(QDialog):
             status_text = "\n".join(item.output_statuses)
             self.preview_table.setItem(row_index, 3, QTableWidgetItem(status_text))
             self.preview_table.setItem(row_index, 4, QTableWidgetItem("Not run"))
+        self.preview_table.blockSignals(signals_were_blocked)
         self.preview_table.resizeRowsToContents()
         total_items = result.total_items
-        collision_count = result.collision_count
         explicit_outputs = result.explicit_outputs
         messages = [
             f"Showing {len(result)} of {total_items} planned batch item(s). "
@@ -997,8 +1130,6 @@ class CollectionBatchDialog(QDialog):
             messages.append(
                 "The table is current. No graph representative was calculated."
             )
-        if collision_count:
-            messages.append(f"{collision_count} collision(s) need attention.")
         if not explicit_outputs:
             messages.append(
                 "Compatibility fallback: terminal graph outputs will be saved; "
@@ -1011,7 +1142,8 @@ class CollectionBatchDialog(QDialog):
                 f"{total_items} paired items, write {planned_outputs} outputs, "
                 "and validate the results and provenance."
             )
-        self.preview_status.setText(" ".join(messages))
+        self._preview_status_base = tuple(messages)
+        self.preview_status.setText(" ".join(self._preview_status_base))
         if result.rows:
             self.select_preview_item(0)
             if (
@@ -1040,11 +1172,13 @@ class CollectionBatchDialog(QDialog):
             self.graph_preview_status.setText(
                 "The batch plan contains no representative items to preview."
             )
+        self._update_processing_selection()
         self._sync_preview_item_button()
 
     def begin_run(self, total: int) -> None:
         """Enter retained, determinate item-level batch progress mode."""
         total = max(int(total), 0)
+        self._run_total = total
         if self._run_control_enabled_states is None:
             self._run_control_enabled_states = {
                 control: control.isEnabled() for control in self._run_controls()
@@ -1057,14 +1191,23 @@ class CollectionBatchDialog(QDialog):
         self.run_progress_bar.setValue(0)
         self.run_progress_bar.setFormat(f"0 / {total}")
         self.run_progress_label.setText(
-            f"Starting full batch run with {total} planned item(s)..."
+            f"Starting full batch run with {total} selected item(s)..."
         )
         self.run_result_label.clear()
+        excluded = self.excluded_item_indexes()
         for table_row in range(self.preview_table.rowCount()):
-            self._set_table_run_status(table_row, "Pending")
+            item = self.preview_table.item(table_row, 0)
+            batch_index = (
+                int(item.data(Qt.UserRole)) + 1 if item is not None else table_row + 1
+            )
+            self._set_table_run_status(
+                table_row,
+                "Excluded" if batch_index in excluded else "Pending",
+            )
 
     def _reset_run_display(self) -> None:
         """Clear an earlier result when a fresh batch plan becomes current."""
+        self._run_total = 0
         self.run_progress_bar.setRange(0, 1)
         self.run_progress_bar.setValue(0)
         self.run_progress_bar.setFormat("Not run")
@@ -1092,7 +1235,7 @@ class CollectionBatchDialog(QDialog):
         self.run_progress_label.setText(
             f"Item {index} of {total}: {batch_id} ({normalized_status})."
         )
-        table_row = self._preview_table_rows.get(index)
+        table_row = self._preview_table_batch_ids.get(str(batch_id))
         if table_row is not None:
             self._set_table_run_status(
                 table_row,
@@ -1121,7 +1264,7 @@ class CollectionBatchDialog(QDialog):
                 table_row,
                 str(status).replace("_", " ").title(),
             )
-        total = len(manifest_items)
+        total = self._run_total or len(manifest_items)
         self.run_group.show()
         self.run_progress_bar.setRange(0, max(total, 1))
         self.run_progress_bar.setValue(total)
@@ -1175,6 +1318,7 @@ class CollectionBatchDialog(QDialog):
         self._run_in_progress = False
         self._restore_run_controls()
         self._sync_preview_item_button()
+        self._sync_run_button()
 
     def _run_controls(self) -> tuple[QWidget, ...]:
         controls: list[QWidget] = [
@@ -1190,6 +1334,7 @@ class CollectionBatchDialog(QDialog):
             self.save_config_button,
             self.demo_config_button,
             self.preview_button,
+            self.preview_table,
             self.preview_item_button,
             self.run_button,
         ]

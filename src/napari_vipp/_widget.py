@@ -4332,7 +4332,7 @@ class VippWidget(QWidget):
         try:
             fresh_preview = self._collection_batch_controller.preview(
                 **values,
-                preview_limit=25,
+                preview_limit=None,
             )
         except Exception as exc:
             dialog.show_run_error(f"Batch preflight failed: {exc}")
@@ -4406,6 +4406,13 @@ class VippWidget(QWidget):
         if total <= 0:
             dialog.show_run_error("The batch plan contains no items to run.")
             return
+        excluded_item_indexes = dialog.excluded_item_indexes()
+        if len(excluded_item_indexes) >= total:
+            dialog.show_plan_refresh_required(
+                "Select at least one batch item before running."
+            )
+            return
+        selected_total = total - len(excluded_item_indexes)
 
         # Batch execution owns the GUI-thread progress surface. Supersede any
         # representative calculation so late interactive results cannot update
@@ -4424,16 +4431,17 @@ class VippWidget(QWidget):
             self._source_load_pending = False
             self._set_pipeline_busy(False)
         self._collection_batch_running = True
-        dialog.begin_run(total)
+        dialog.begin_run(selected_total)
         self.batch_navigator.set_navigation_enabled(False)
         self.batch_navigator.begin_batch_progress(
-            total,
+            selected_total,
             "Preparing full batch run...",
         )
         try:
             result = self._run_collection_batch(
                 **values,
                 expected_items=preview.items,
+                excluded_item_indexes=excluded_item_indexes,
             )
         except Exception as exc:
             self._set_pipeline_busy(False)
@@ -5075,6 +5083,7 @@ class VippWidget(QWidget):
         existing_file_policy: str = ExistingFilePolicy.ERROR.value,
         continue_on_error: bool = True,
         expected_items: tuple[BatchItemPlan, ...] | None = None,
+        excluded_item_indexes: frozenset[int] | None = None,
     ) -> BatchRunResult:
         del save_workflow_snapshot
         positions = self.graph_view.node_positions()
@@ -5095,7 +5104,12 @@ class VippWidget(QWidget):
         config_path = output_path / BATCH_CONFIG_FILENAME
         workflow_path = output_path / BATCH_WORKFLOW_FILENAME
         script_path = output_path / BATCH_SCRIPT_FILENAME
-        plan = preflight_batch(workflow, config, workflow_path=workflow_path)
+        plan = preflight_batch(
+            workflow,
+            config,
+            workflow_path=workflow_path,
+            excluded_item_indexes=excluded_item_indexes,
+        )
         if expected_items is not None and plan.items != tuple(expected_items):
             raise RuntimeError(
                 "The batch plan changed during run startup. No batch item was "
@@ -5122,6 +5136,7 @@ class VippWidget(QWidget):
                 workflow_path=workflow_path,
                 config_path=config_path,
                 plan=plan,
+                excluded_item_indexes=excluded_item_indexes,
                 progress_callback=self._collection_batch_progress,
             )
         finally:
@@ -5226,7 +5241,7 @@ class VippWidget(QWidget):
         save_workflow_snapshot: bool = True,
         save_python_script: bool = True,
         source_bindings: list[dict] | None = None,
-        preview_limit: int = 25,
+        preview_limit: int | None = 25,
         existing_file_policy: str = ExistingFilePolicy.ERROR.value,
         continue_on_error: bool = True,
         activate_representative: bool = True,

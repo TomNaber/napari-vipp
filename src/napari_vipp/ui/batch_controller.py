@@ -121,7 +121,7 @@ class CollectionBatchController:
         save_workflow_snapshot: bool = True,
         save_python_script: bool = True,
         source_bindings: list[dict] | None = None,
-        preview_limit: int = 25,
+        preview_limit: int | None = 25,
         existing_file_policy: str = ExistingFilePolicy.ERROR.value,
         continue_on_error: bool = True,
     ) -> BatchPreviewResult:
@@ -145,6 +145,11 @@ class CollectionBatchController:
             workflow_path=config.output_dir / BATCH_WORKFLOW_FILENAME,
         )
         explicit = bool(batch_output_node_ids(self._pipeline_provider()))
+        preview_items = (
+            plan.items
+            if preview_limit is None
+            else plan.items[: max(int(preview_limit), 0)]
+        )
         rows = tuple(
             BatchPreviewRow(
                 batch_index=item.index,
@@ -158,7 +163,7 @@ class CollectionBatchController:
                     for node_id in item.source_series_indices
                 },
             )
-            for item in plan.items[: max(int(preview_limit), 0)]
+            for item in preview_items
         )
         collision_count = sum(
             output.duplicate

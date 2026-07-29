@@ -17,7 +17,7 @@ import re
 import sys
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -797,6 +797,27 @@ def _fully_skipped_item_record(
     )
 
 
+def _excluded_item_record(item: BatchItemRecord) -> BatchItemRecord:
+    """Record a deliberate UI exclusion without loading or processing it."""
+    reason = "Excluded from processing in the batch workspace."
+    return replace(
+        item,
+        outputs=tuple(
+            replace(
+                output,
+                status=BatchStatus.SKIPPED,
+                error_type="",
+                error_message=reason,
+            )
+            for output in item.outputs
+        ),
+        status=BatchStatus.SKIPPED,
+        finished_at=_timestamp(),
+        error_type="",
+        error_message=reason,
+    )
+
+
 def _with_item_record_write_failure(
     item: BatchItemRecord,
     error: OSError,
@@ -1125,6 +1146,7 @@ def run_batch(
     workflow_path: str | Path | None = None,
     config_path: str | Path | None = None,
     plan: BatchPlan | None = None,
+    excluded_item_indexes: Collection[int] | None = None,
     progress_callback: Callable[[int, int, str, str], None] | None = None,
 ) -> BatchRunResult:
     """Execute a deterministic batch plan with checkpointed provenance."""
@@ -1142,13 +1164,8 @@ def run_batch(
             "A supplied batch plan must use the exact validated config instance."
         )
     plan = _with_fixed_source_collisions(plan, fixed_source_paths.values())
-    if plan.has_collisions:
-        collisions = _collision_paths(plan)
-        preview = ", ".join(collisions[:3])
-        suffix = "" if len(collisions) <= 3 else f" (+{len(collisions) - 3} more)"
-        raise FileExistsError(
-            "Batch preflight found output collisions: " + preview + suffix
-        )
+    excluded = _normalize_excluded_item_indexes(plan, excluded_item_indexes)
+    _raise_for_batch_collisions(plan, excluded)
     plan.output_dir.mkdir(parents=True, exist_ok=True)
 
     workflow_label = str(workflow_path or config.workflow_file)
@@ -1173,17 +1190,35 @@ def run_batch(
     _save_run_manifest(manifest_path, manifest_archive_path, manifest)
     saved_paths: list[Path] = []
     output_node_ids = tuple(output.node_id for output in config.outputs)
-    total = len(plan.items)
+    selected_items = tuple(
+        item for item in plan.items if item.index not in excluded
+    )
+    progress_indexes = {
+        item.index: index for index, item in enumerate(selected_items, start=1)
+    }
+    total = len(selected_items)
 
     for item_position, item_plan in enumerate(plan.items):
         item_record = manifest.items[item_position]
+        if item_plan.index in excluded:
+            item_record = _excluded_item_record(item_record)
+            manifest = manifest.replace_item(item_record)
+            record_error = _try_save_item_record(item_records_dir, item_record)
+            if record_error is not None:
+                item_record = _with_item_record_write_failure(
+                    item_record,
+                    record_error,
+                )
+                manifest = manifest.replace_item(item_record)
+            continue
+        progress_index = progress_indexes[item_plan.index]
         skipped_record = _fully_skipped_item_record(item_record, item_plan)
         if skipped_record is not None:
             item_record = skipped_record
             manifest = manifest.replace_item(item_record)
             _report_progress(
                 progress_callback,
-                item_plan.index,
+                progress_index,
                 total,
                 item_plan.batch_id,
                 "running",
@@ -1197,7 +1232,7 @@ def run_batch(
                 manifest = manifest.replace_item(item_record)
             _report_progress(
                 progress_callback,
-                item_plan.index,
+                progress_index,
                 total,
                 item_plan.batch_id,
                 item_record.status.value,
@@ -1222,7 +1257,7 @@ def run_batch(
         _try_save_item_record(item_records_dir, item_record)
         _report_progress(
             progress_callback,
-            item_plan.index,
+            progress_index,
             total,
             item_plan.batch_id,
             "running",
@@ -1421,7 +1456,7 @@ def run_batch(
             manifest = manifest.replace_item(item_record)
         _report_progress(
             progress_callback,
-            item_plan.index,
+            progress_index,
             total,
             item_plan.batch_id,
             item_record.status.value,
@@ -1471,21 +1506,52 @@ def _report_progress(
         return
 
 
+def _normalize_excluded_item_indexes(
+    plan: BatchPlan,
+    excluded_item_indexes: Collection[int] | None,
+) -> frozenset[int]:
+    try:
+        excluded = frozenset(int(index) for index in excluded_item_indexes or ())
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Excluded batch item indexes must be integers.") from exc
+    unknown = excluded - {item.index for item in plan.items}
+    if unknown:
+        values = ", ".join(str(index) for index in sorted(unknown))
+        raise ValueError(f"Excluded batch item indexes are out of range: {values}.")
+    return excluded
+
+
+def _raise_for_batch_collisions(
+    plan: BatchPlan,
+    excluded_item_indexes: Collection[int],
+) -> None:
+    selected_plan = replace(
+        plan,
+        items=tuple(
+            item for item in plan.items if item.index not in excluded_item_indexes
+        ),
+    )
+    if not selected_plan.has_collisions:
+        return
+    collisions = _collision_paths(selected_plan)
+    preview = ", ".join(collisions[:3])
+    suffix = "" if len(collisions) <= 3 else f" (+{len(collisions) - 3} more)"
+    raise FileExistsError(
+        "Batch preflight found output collisions: " + preview + suffix
+    )
+
+
 def preflight_batch(
     workflow: object,
     config: BatchConfig,
     *,
     workflow_path: str | Path | None = None,
+    excluded_item_indexes: Collection[int] | None = None,
 ) -> BatchPlan:
     """Validate and plan a batch, raising before any artifact is modified."""
     plan = plan_batch(workflow, config, workflow_path=workflow_path)
-    if plan.has_collisions:
-        collisions = _collision_paths(plan)
-        preview = ", ".join(collisions[:3])
-        suffix = "" if len(collisions) <= 3 else f" (+{len(collisions) - 3} more)"
-        raise FileExistsError(
-            "Batch preflight found output collisions: " + preview + suffix
-        )
+    excluded = _normalize_excluded_item_indexes(plan, excluded_item_indexes)
+    _raise_for_batch_collisions(plan, excluded)
     return plan
 
 
