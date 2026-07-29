@@ -4037,25 +4037,29 @@ def if_else(
     match: str = "Equal",
     value: str = "",
     source_name: str = "",
+    source_uri: str = "",
 ):
-    """Route an input to one of two outputs using its carried source name."""
-    if field != "Name":
-        raise ValueError("If Else currently supports only the Name field.")
-    name = str(source_name)
+    """Route an input using its carried image name or source filename."""
+    if field == "Name":
+        actual = str(source_name)
+    elif field == "File":
+        actual = Path(str(source_uri)).name
+    else:
+        raise ValueError(f"Unsupported If Else field: {field!r}.")
     expected = str(value)
-    if not name.strip():
-        raise ValueError("If Else needs a non-empty source Name.")
+    if not actual.strip():
+        raise ValueError(f"If Else needs a non-empty source {field}.")
     if not expected.strip():
         raise ValueError("If Else needs non-empty comparison text.")
 
     if match == "Equal":
-        matched = name == expected
+        matched = actual == expected
     elif match == "Start with":
-        matched = name.startswith(expected)
+        matched = actual.startswith(expected)
     elif match == "End with":
-        matched = name.endswith(expected)
+        matched = actual.endswith(expected)
     elif match == "Contain":
-        matched = expected in name
+        matched = expected in actual
     else:
         raise ValueError(f"Unsupported If Else match mode: {match!r}.")
 

@@ -5,10 +5,10 @@
 ### Conditional Routing
 
 - Added a batch-ready `If Else` node under `Image Data → Math & Logic`. It
-  routes an input through labeled `If` or `Else` ports using exact source-name
-  matching, including napari layer names, single-file names, and selected
-  multi-image series names. Nodes downstream of the inactive route are muted,
-  and inactive batch outputs are recorded as not applicable instead of failed.
+  routes an input through labeled `If` or `Else` ports using either its image
+  or series `Name` or its originating `File` basename. Nodes downstream of the
+  inactive route are muted, and inactive batch outputs are recorded as not
+  applicable instead of failed.
 
 ### Imaris Checkpoints
 

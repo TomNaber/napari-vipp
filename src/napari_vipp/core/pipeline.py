@@ -4457,9 +4457,9 @@ NODE_LIBRARY: tuple[OperationSpec, ...] = (
                 "choice",
                 "Name",
                 0,
-                0,
                 1,
-                choices=("Name",),
+                1,
+                choices=("Name", "File"),
             ),
             ParameterSpec(
                 "condition",
@@ -7124,6 +7124,7 @@ class PrototypePipeline:
         )
         if node.operation_id == "if_else" and isinstance(input_state, ImageState):
             kwargs["source_name"] = input_state.source_name
+            kwargs["source_uri"] = input_state.source.uri
         if node.operation_id == "save_output":
             kwargs["image_state"] = input_state
         if node.operation_id in SPATIAL_OPERATIONS:

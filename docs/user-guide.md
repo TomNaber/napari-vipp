@@ -988,14 +988,16 @@ fluorescence channel splitting.
 ### If Else
 
 Use `If Else` under `Image Data → Math & Logic` to route each input through one
-of two labeled graph outputs. Choose `Name`, `Does` or `Does not`, a comparison
-(`Equal`, `Start with`, `End with`, or `Contain`), and enter the comparison
-text. Matching is case-sensitive and blank names or comparison text are
-reported as errors.
+of two labeled graph outputs. Choose `Name` or `File`, `Does` or `Does not`, a
+comparison (`Equal`, `Start with`, `End with`, or `Contain`), and enter the
+comparison text. Matching is case-sensitive and blank source values or
+comparison text are reported as errors.
 
-`Name` is the napari layer name for a layer source, the basename including its
-extension for a single-image file, or the selected series/image name for a
-multi-image container. The inactive branch is not calculated: every downstream
+`Name` is the napari layer name for a layer source or the selected series/image
+name for a multi-image container. `File` is the originating file or store
+basename including its extension, so every series from the same container has
+the same `File`. A source without an originating file reports an error when
+`File` is selected. The inactive branch is not calculated: every downstream
 node on that route is shown as muted rather than failed. In batch runs, its
 `Batch Output` is recorded as `not_applicable` and no file is written; a
 successful output on the selected branch still makes the item complete.
