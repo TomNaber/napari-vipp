@@ -75,6 +75,7 @@ from napari_vipp.core.operations import (
     gaussian_blur_3d,
     h_maxima_markers,
     hysteresis_threshold,
+    if_else,
     invert,
     isodata_threshold,
     label_connected_components,
@@ -726,7 +727,7 @@ def validate_parameter_value(
     range are invariant and are therefore validated centrally.
     """
     label = f"{context} {spec.name!r}"
-    if spec.kind == "choice":
+    if spec.kind in {"choice", "radio"}:
         if spec.dynamic_choices:
             _validate_dynamic_choice_value(spec, value, label=label)
             return
@@ -930,6 +931,7 @@ EXECUTION_READY = "ready"
 EXECUTION_RUNNING = "running"
 EXECUTION_STALE = "stale"
 EXECUTION_BLOCKED = "blocked"
+EXECUTION_MUTED = "muted"
 EXECUTION_ERROR = "error"
 EXECUTION_NOT_CALCULATED = "not_calculated"
 EXECUTION_POLICIES = {"auto", "manual"}
@@ -4427,6 +4429,53 @@ NODE_LIBRARY: tuple[OperationSpec, ...] = (
         subcategory=MATH_LOGIC_GROUP,
     ),
     OperationSpec(
+        "if_else",
+        "If Else",
+        IMAGE_DATA_CATEGORY,
+        "array",
+        "image",
+        (
+            ParameterSpec(
+                "field",
+                "Field",
+                "choice",
+                "Name",
+                0,
+                0,
+                1,
+                choices=("Name",),
+            ),
+            ParameterSpec(
+                "condition",
+                "Condition",
+                "radio",
+                "Does",
+                0,
+                1,
+                1,
+                choices=("Does", "Does not"),
+            ),
+            ParameterSpec(
+                "match",
+                "Match",
+                "choice",
+                "Equal",
+                0,
+                3,
+                1,
+                choices=("Equal", "Start with", "End with", "Contain"),
+            ),
+            ParameterSpec("value", "Value", "text", "", 0, 0, 1),
+        ),
+        if_else,
+        subcategory=MATH_LOGIC_GROUP,
+        outputs=(
+            OutputSpec("if", "image", "If"),
+            OutputSpec("else", "image", "Else"),
+        ),
+        preserves_input_type=True,
+    ),
+    OperationSpec(
         "logical_and",
         "Logical AND",
         IMAGE_DATA_CATEGORY,
@@ -6645,12 +6694,16 @@ class PrototypePipeline:
                 primary_output, primary_state = results[0]
                 self.outputs[node_id] = primary_output
                 self.output_states[node_id] = primary_state
+                has_output = any(data is not None for data, _state in results)
+                muted = not has_output and self.is_conditionally_inactive(node_id)
                 self.node_execution_states[node_id] = (
                     EXECUTION_READY
-                    if primary_output is not None
-                    else EXECUTION_NOT_CALCULATED
+                    if has_output
+                    else EXECUTION_MUTED if muted else EXECUTION_NOT_CALCULATED
                 )
-                self.node_execution_messages[node_id] = ""
+                self.node_execution_messages[node_id] = (
+                    "Muted because its If Else branch is inactive." if muted else ""
+                )
                 remaining.remove(node_id)
                 completed.add(node_id)
                 self.completed_node_ids.add(node_id)
@@ -6717,6 +6770,32 @@ class PrototypePipeline:
                     descendants.add(connection.target_id)
                     changed = True
         return descendants
+
+    def is_conditionally_inactive(self, node_id: str) -> bool:
+        """Return whether ``node_id`` descends from an inactive If Else port."""
+        pending = [node_id]
+        visited: set[str] = set()
+        while pending:
+            current = pending.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            for connection in self._input_connections(current):
+                source = self.nodes.get(connection.source_id)
+                if source is None:
+                    continue
+                if self.node_execution_states.get(source.id) == EXECUTION_MUTED:
+                    return True
+                if source.operation_id == "if_else":
+                    outputs = self.node_outputs.get(source.id, ())
+                    if (
+                        0 <= connection.source_port < len(outputs)
+                        and outputs[connection.source_port] is None
+                        and any(output is not None for output in outputs)
+                    ):
+                        return True
+                pending.append(source.id)
+        return False
 
     def ancestors_inclusive(self, node_ids: Iterable[str]) -> set[str]:
         sources = {node_id for node_id in node_ids if node_id in self.nodes}
@@ -6816,6 +6895,13 @@ class PrototypePipeline:
                     acquisition=(state.acquisition if state is not None else None),
                     source=(state.source if state is not None else None),
                 )
+            if (
+                state is not None
+                and state.source_name
+                and payload.name
+                and state.source_name != payload.name
+            ):
+                state = replace(state, source_name=payload.name)
             state = with_channel_colors(state, node.params.get("channel_colors", ""))
             return [
                 (
@@ -6968,6 +7054,8 @@ class PrototypePipeline:
             progress_callback,
             cancel_callback,
         )
+        if node.operation_id == "if_else" and isinstance(input_state, ImageState):
+            kwargs["source_name"] = input_state.source_name
         if node.operation_id == "save_output":
             kwargs["image_state"] = input_state
         if node.operation_id in SPATIAL_OPERATIONS:

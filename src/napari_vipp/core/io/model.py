@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from napari_vipp.core.metadata import ImageState
@@ -59,3 +60,14 @@ class ImageDataset:
     multiscale_levels: tuple[Any, ...] = ()
     associated_labels: tuple[str, ...] = ()
     provenance: dict[str, Any] = field(default_factory=dict)
+
+
+def image_dataset_source_name(dataset: ImageDataset) -> str:
+    """Return the user-visible name used by source-aware workflow nodes."""
+    inspection = dataset.inspection
+    if len(inspection.series) > 1:
+        return dataset.selected_series.name or (
+            f"Series {dataset.selected_series.index + 1}"
+        )
+    uri = str(inspection.uri or "").strip()
+    return Path(uri).name if uri else dataset.selected_series.name

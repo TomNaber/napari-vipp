@@ -573,6 +573,57 @@ def test_run_batch_writes_output_and_complete_provenance_manifest(tmp_path):
     assert len(list(item_records_dir.glob("*.json"))) == 1
 
 
+def test_run_batch_writes_only_selected_if_else_branch(tmp_path):
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    np.save(inputs / "ordinary.npy", np.ones((3, 4), dtype=np.uint16))
+    np.save(inputs / "special.npy", np.full((3, 4), 2, dtype=np.uint16))
+
+    pipeline = PrototypePipeline()
+    pipeline.reset_empty_graph()
+    condition = pipeline.add_node("if_else")
+    pipeline.set_param(condition.id, "value", "special.npy")
+    assert pipeline.connect("input", condition.id).success
+    output_ids = []
+    for source_port, tag in enumerate(("if", "else")):
+        output = pipeline.add_node("batch_output")
+        pipeline.set_param(output.id, "tag", tag)
+        pipeline.set_param(output.id, "format", "npy")
+        assert pipeline.connect(
+            condition.id,
+            output.id,
+            source_port=source_port,
+        ).success
+        output_ids.append(output.id)
+
+    workflow = serialize_workflow(pipeline)
+    config = _batch_config(
+        workflow,
+        inputs,
+        tmp_path / "outputs",
+        tuple(output_ids),
+    )
+
+    result = run_batch(workflow, config)
+
+    expected = {
+        tmp_path / "outputs" / "ordinary__else.npy",
+        tmp_path / "outputs" / "special__if.npy",
+    }
+    assert set(result.saved_paths) == expected
+    assert all(path.exists() for path in expected)
+    assert result.summary["completed"] == 2
+    assert all(item.status == BatchStatus.COMPLETED for item in result.manifest.items)
+    assert [output.status for output in result.manifest.items[0].outputs] == [
+        BatchStatus.NOT_APPLICABLE,
+        BatchStatus.COMPLETED,
+    ]
+    assert [output.status for output in result.manifest.items[1].outputs] == [
+        BatchStatus.COMPLETED,
+        BatchStatus.NOT_APPLICABLE,
+    ]
+
+
 def test_zarr_chunk_change_fails_item_before_any_output_is_published(
     tmp_path,
     monkeypatch,

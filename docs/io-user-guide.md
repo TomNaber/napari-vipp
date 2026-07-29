@@ -267,9 +267,11 @@ sidecar, so the sidecars are a recovery trail rather than a transaction log.
 After a process interruption, inspect that run-id sidecar directory for the
 last checkpoints; the canonical latest/archive manifests are finalized only
 when the runner exits normally.
-Output records move through `pending` to `completed`, `skipped`, or `failed`.
-Item records may also be `running` or `partial`; the final summary counts
-completed, partial, skipped, and failed items separately.
+Output records move through `pending` to `completed`, `skipped`,
+`not_applicable`, or `failed`. Conditional branches use `not_applicable` when
+the route is intentionally inactive. Item records may also be `running` or
+`partial`; the final summary counts completed, partial, skipped, and failed
+items separately.
 
 The dialog always writes:
 

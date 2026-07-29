@@ -369,7 +369,7 @@ The current high-level groups are:
     Composite → RGB
   - `Utilities`: Convert Dtype
   - `Math & Logic`: Calculate New Image, Add, Subtract, Ratio, Mask Image,
-    Logical AND, Logical OR, Logical XOR, Invert
+    If Else, Logical AND, Logical OR, Logical XOR, Invert
 - `Intensity & Contrast`: Linear Scale + Offset, Gamma Correction, Rescale
   Intensity, Normalize, Clip
 - `Filtering`
@@ -1231,10 +1231,10 @@ Collection batch UI:
   after every output. The final manifest contains hashes, software versions,
   input identity and available source metadata, output policy/path/status,
   errors, and summary counts. Output statuses are `pending`, `completed`,
-  `skipped`, and `failed`; item statuses additionally include `running` and
-  `partial`. After an interrupted process, the sidecars are the recovery
-  checkpoints; the canonical latest/archive manifests are finalized on normal
-  runner exit rather than reconciled automatically.
+  `skipped`, `not_applicable`, and `failed`; item statuses additionally include
+  `running` and `partial`. After an interrupted process, the sidecars are the
+  recovery checkpoints; the canonical latest/archive manifests are finalized
+  on normal runner exit rather than reconciled automatically.
 - For each item, the runner captures exact identities for all collection-bound
   and fixed file sources before reading. It fully writes every available output
   to a private same-directory staging path, including forcing lazy output bytes,

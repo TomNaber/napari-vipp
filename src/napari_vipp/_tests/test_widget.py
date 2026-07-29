@@ -35,6 +35,7 @@ from qtpy.QtWidgets import (
 from napari_vipp import __version__ as VIPP_VERSION
 from napari_vipp._graph import (
     BLOCKED_EXECUTION_ACCENT,
+    MUTED_EXECUTION_ACCENT,
     STALE_EXECUTION_ACCENT,
     PortLabelMode,
 )
@@ -114,6 +115,7 @@ from napari_vipp.core.operations import (
 )
 from napari_vipp.core.pipeline import (
     EXECUTION_BLOCKED,
+    EXECUTION_MUTED,
     EXECUTION_NOT_CALCULATED,
     EXECUTION_READY,
     EXECUTION_RUNNING,
@@ -2422,7 +2424,50 @@ def test_image_data_category_groups_source_axis_and_channel_nodes(qtbot):
     assert _palette_child_by_text(intensity, "Gamma Correction")
     assert _palette_child_by_text(math_logic, "Calculate New Image")
     assert _palette_child_by_text(math_logic, "Add")
+    assert _palette_child_by_text(math_logic, "If Else")
     assert _palette_child_by_text(math_logic, "Logical XOR")
+
+
+def test_if_else_renders_radio_condition_and_presents_active_else_output(qtbot):
+    viewer = _Viewer(np.arange(20, dtype=np.float32).reshape(4, 5))
+    widget = VippWidget(viewer)
+    widget._should_run_pipeline_in_background = lambda *args, **kwargs: False
+    qtbot.addWidget(widget)
+
+    node = widget.add_node_from_palette("if_else")
+    inactive = widget.add_node_from_palette("gaussian_blur")
+    inactive_descendant = widget.add_node_from_palette("median_filter")
+    widget._connect_nodes("input", node.id)
+    widget._connect_nodes(node.id, inactive.id, source_port=0)
+    widget._connect_nodes(inactive.id, inactive_descendant.id)
+    widget.graph_view.select_node(node.id)
+
+    condition = widget._parameter_widgets["condition"]
+    assert tuple(condition.buttons) == ("Does", "Does not")
+    condition.buttons["Does not"].click()
+    widget._parameter_widgets["value"].edit.setText("input volume")
+    widget._debounce_timer.stop()
+    widget.run_pipeline(force_sync=True)
+
+    assert widget.pipeline.nodes[node.id].params["condition"] == "Does not"
+    assert [port.label for port in widget.pipeline.output_ports(node.id)] == [
+        "If",
+        "Else",
+    ]
+    assert widget.pipeline.node_outputs[node.id][0] is None
+    active = widget.pipeline.node_outputs[node.id][1]
+    preview, state = widget._thumbnail_payload_for_node(node.id, None)
+    assert preview is active
+    assert state is widget.pipeline.node_output_states[node.id][1]
+    assert widget.pipeline.node_execution_states[node.id] == EXECUTION_READY
+    assert widget.pipeline.node_execution_states[inactive.id] == EXECUTION_MUTED
+    assert (
+        widget.pipeline.node_execution_states[inactive_descendant.id]
+        == EXECUTION_MUTED
+    )
+    muted_card = widget.graph_view._cards[inactive_descendant.id]
+    assert MUTED_EXECUTION_ACCENT in muted_card.styleSheet()
+    assert "inactive" in muted_card.toolTip()
 
 
 def test_assign_channel_names_renders_and_updates_each_channel(qtbot):

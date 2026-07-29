@@ -16,6 +16,7 @@ import numpy as np
 from napari_vipp.core.io import (
     ImageDataset,
     SourceInspection,
+    image_dataset_source_name,
     read_image,
 )
 from napari_vipp.core.metadata import image_state_from_array
@@ -112,7 +113,7 @@ def load_frozen_file_source_snapshot(
             "vipp_source_identity": identity.to_dict(),
             "vipp_source_snapshot_policy": FILE_SOURCE_SNAPSHOT_POLICY,
         },
-        dataset.selected_series.name,
+        image_dataset_source_name(dataset),
         snapshot_state,
         identity,
     )

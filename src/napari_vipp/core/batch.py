@@ -36,7 +36,12 @@ from napari_vipp.core.atomic_io import (
 from napari_vipp.core.atomic_io import (
     atomic_write_text,
 )
-from napari_vipp.core.io import MICROSCOPE_SUFFIXES, inspect_image_source, read_image
+from napari_vipp.core.io import (
+    MICROSCOPE_SUFFIXES,
+    image_dataset_source_name,
+    inspect_image_source,
+    read_image,
+)
 from napari_vipp.core.operations import save_array_output
 from napari_vipp.core.pipeline import PrototypePipeline, SourcePayload
 from napari_vipp.core.source_identity import (
@@ -51,7 +56,7 @@ from napari_vipp.core.workflow import deserialize_workflow
 BATCH_CONFIG_TYPE = "napari-vipp-batch-config"
 BATCH_CONFIG_VERSION = 1
 BATCH_MANIFEST_TYPE = "napari-vipp-batch-manifest"
-BATCH_MANIFEST_VERSION = 1
+BATCH_MANIFEST_VERSION = 2
 
 BATCH_CONFIG_FILENAME = "vipp_batch_config.json"
 BATCH_MANIFEST_FILENAME = "vipp_batch_manifest.json"
@@ -110,6 +115,7 @@ class BatchStatus(StrEnum):
     COMPLETED = "completed"
     PARTIAL = "partial"
     SKIPPED = "skipped"
+    NOT_APPLICABLE = "not_applicable"
     FAILED = "failed"
 
 
@@ -1190,6 +1196,11 @@ def run_batch(
     _save_run_manifest(manifest_path, manifest_archive_path, manifest)
     saved_paths: list[Path] = []
     output_node_ids = tuple(output.node_id for output in config.outputs)
+    conditional_node_ids = tuple(
+        node_id
+        for node_id, node in pipeline.nodes.items()
+        if node.operation_id == "if_else"
+    )
     selected_items = tuple(
         item for item in plan.items if item.index not in excluded
     )
@@ -1286,7 +1297,7 @@ def run_batch(
                 input_metadata=None,
                 input_name="",
                 source_payloads=payloads,
-                retain_node_ids=output_node_ids,
+                retain_node_ids=(*output_node_ids, *conditional_node_ids),
                 prune_unretained=True,
             )
         except Exception as exc:
@@ -1314,6 +1325,14 @@ def run_batch(
                 else:
                     try:
                         staged = _save_planned_output(pipeline, output_plan)
+                    except _NotApplicableOutput as exc:
+                        output_record = replace(
+                            output_record,
+                            status=BatchStatus.NOT_APPLICABLE,
+                            error_type="",
+                            error_message=str(exc),
+                        )
+                        output_checkpoint_changed = True
                     except _SkippedOutput as exc:
                         output_record = replace(
                             output_record,
@@ -1892,7 +1911,7 @@ def _source_payloads_for_item(
                 "vipp_source_path": str(path),
                 "vipp_source_provenance": provenance,
             },
-            dataset.selected_series.name or path.name,
+            image_dataset_source_name(dataset),
             dataset.image_state,
         )
         identity = {
@@ -1977,6 +1996,10 @@ def _save_planned_output(
             raise FileExistsError(f"Output already exists: {output.path}")
     data = pipeline.outputs.get(output.node_id)
     if data is None:
+        if pipeline.is_conditionally_inactive(output.node_id):
+            raise _NotApplicableOutput(
+                f"Conditional branch was not selected: {output.node_title}."
+            )
         raise ValueError(f"Batch output {output.node_id!r} produced no data.")
     output.path.parent.mkdir(parents=True, exist_ok=True)
     temporary = _temporary_output_path(output.path)
@@ -2142,7 +2165,13 @@ def _path_identity(path: Path) -> dict[str, int]:
 
 
 def _item_status(outputs: tuple[BatchOutputRecord, ...]) -> BatchStatus:
-    statuses = {output.status for output in outputs}
+    statuses = {
+        output.status
+        for output in outputs
+        if output.status != BatchStatus.NOT_APPLICABLE
+    }
+    if not statuses:
+        return BatchStatus.SKIPPED
     if statuses == {BatchStatus.COMPLETED}:
         return BatchStatus.COMPLETED
     if statuses == {BatchStatus.SKIPPED}:
@@ -2445,6 +2474,10 @@ def _reject_duplicate_ids(values, label: str) -> None:
 
 
 class _SkippedOutput(RuntimeError):
+    pass
+
+
+class _NotApplicableOutput(RuntimeError):
     pass
 
 

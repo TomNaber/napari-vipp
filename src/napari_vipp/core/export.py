@@ -41,6 +41,7 @@ _RESERVED_FUNCTION_NAMES = {
     "argparse",
     "batch_process",
     "is_table_data",
+    "image_dataset_source_name",
     "json",
     "load_image",
     "pipeline_from_workflow",
@@ -181,7 +182,12 @@ def _build_imports() -> str:
             "",
             "from napari_vipp import __version__ as VIPP_VERSION",
             "from napari_vipp.core.batch_setup import pipeline_from_workflow",
-            "from napari_vipp.core.io import ImageDataset, read_image, write_image",
+            "from napari_vipp.core.io import (",
+            "    ImageDataset,",
+            "    image_dataset_source_name,",
+            "    read_image,",
+            "    write_image,",
+            ")",
             "from napari_vipp.core.pipeline import SourcePayload",
             "from napari_vipp.core.tables import is_table_data, save_table_output",
         )
@@ -394,11 +400,10 @@ def _coerce_source_payload(
             value.revision_token,
         )
     if isinstance(value, ImageDataset):
-        selected = getattr(value, "selected_series", None)
         return SourcePayload(
             value.data,
             _dataset_metadata(value) if metadata is None else metadata,
-            name or str(getattr(selected, "name", "") or ""),
+            name or image_dataset_source_name(value),
             value.image_state if image_state is None else image_state,
         )
     return SourcePayload(value, metadata, name, image_state)

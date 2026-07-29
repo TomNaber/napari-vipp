@@ -604,9 +604,10 @@ workflow and config hashes, VIPP and runtime package versions, input identity
 and available source metadata, every planned output path/policy, and
 per-item/output status. It embeds the canonical config and scientific graph;
 run-id archives preserve prior runs, while small per-item sidecars are updated
-during execution. Output records use `pending`,
-`completed`, `skipped`, or `failed`; item records additionally use `running`
-and `partial`. An item failure is recorded without discarding successful
+during execution. Output records use `pending`, `completed`, `skipped`,
+`not_applicable`, or `failed`; `not_applicable` means an `If Else` route was
+intentionally inactive. Item records additionally use `running` and `partial`.
+An item failure is recorded without discarding successful
 outputs from the same or earlier items, and later items continue to run by
 default. The final summary separates completed, partial, skipped, and failed
 items.
@@ -958,6 +959,21 @@ axis rather than behaving like a napari slider.
 Use `Split Axis` for non-channel axes such as timepoints, Z slices, or a
 leading custom axis. This keeps accidental Z/time splitting separate from
 fluorescence channel splitting.
+
+### If Else
+
+Use `If Else` under `Image Data → Math & Logic` to route each input through one
+of two labeled graph outputs. Choose `Name`, `Does` or `Does not`, a comparison
+(`Equal`, `Start with`, `End with`, or `Contain`), and enter the comparison
+text. Matching is case-sensitive and blank names or comparison text are
+reported as errors.
+
+`Name` is the napari layer name for a layer source, the basename including its
+extension for a single-image file, or the selected series/image name for a
+multi-image container. The inactive branch is not calculated: every downstream
+node on that route is shown as muted rather than failed. In batch runs, its
+`Batch Output` is recorded as `not_applicable` and no file is written; a
+successful output on the selected branch still makes the item complete.
 
 ## Object, Mesh, And Table Workflows
 

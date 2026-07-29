@@ -65,6 +65,7 @@ from napari_vipp.core.operations import (
     gaussian_blur_3d,
     h_maxima_markers,
     hysteresis_threshold,
+    if_else,
     isodata_threshold,
     label_connected_components,
     label_overlap_association,
@@ -236,6 +237,7 @@ def test_vipp_operation_nodes_are_registered():
         "subtract_images",
         "ratio_image",
         "mask_image",
+        "if_else",
         "measure_objects",
         "measure_objects_intensity",
         "skeletonize",
@@ -5343,6 +5345,53 @@ def test_combine_channels_colours_become_carried_metadata():
 
     assert state.channels[0].color == 0xFFFF00
     assert state.channels[1].color == 0x00FFFF
+
+
+@pytest.mark.parametrize(
+    ("match", "value"),
+    (
+        ("Equal", "Sample_channels.ims"),
+        ("Start with", "Sample"),
+        ("End with", ".ims"),
+        ("Contain", "channels"),
+    ),
+)
+def test_if_else_routes_by_exact_source_name_without_copying(match, value):
+    data = np.arange(12).reshape(3, 4)
+
+    if_output, else_output = if_else(
+        data,
+        match=match,
+        value=value,
+        source_name="Sample_channels.ims",
+    )
+
+    assert if_output is data
+    assert else_output is None
+
+
+def test_if_else_does_not_negates_match_and_matching_is_case_sensitive():
+    data = np.arange(4)
+
+    if_output, else_output = if_else(
+        data,
+        condition="Does not",
+        match="End with",
+        value=".IMS",
+        source_name="sample.ims",
+    )
+
+    assert if_output is data
+    assert else_output is None
+
+
+@pytest.mark.parametrize(
+    ("source_name", "value", "message"),
+    (("", "sample", "source Name"), ("sample", "", "comparison text")),
+)
+def test_if_else_rejects_blank_names(source_name, value, message):
+    with pytest.raises(ValueError, match=message):
+        if_else(np.ones((2, 2)), source_name=source_name, value=value)
 
 
 def test_split_channels_returns_all_channels_losslessly():

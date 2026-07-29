@@ -9,6 +9,7 @@ import numpy as np
 from qtpy.QtCore import QLocale, QSignalBlocker, Qt, Signal
 from qtpy.QtGui import QAction, QValidator
 from qtpy.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -19,6 +20,7 @@ from qtpy.QtWidgets import (
     QLineEdit,
     QMenu,
     QPushButton,
+    QRadioButton,
     QSlider,
     QSpinBox,
     QWidget,
@@ -528,6 +530,52 @@ class ChoiceControl(QWidget):
             if index < 0:
                 index = 0
             self.combo.setCurrentIndex(index)
+        if emit:
+            self.valueChanged.emit(self.value())
+
+
+class RadioChoiceControl(QWidget):
+    """Horizontal radio buttons for a small categorical parameter."""
+
+    valueChanged = Signal(object)
+
+    def __init__(self, spec, value, _bounds: ParameterBounds, parent=None):
+        super().__init__(parent)
+        self.spec = spec
+        self.group = QButtonGroup(self)
+        self.buttons: dict[str, QRadioButton] = {}
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        for choice in spec.choices:
+            button = QRadioButton(str(choice))
+            self.group.addButton(button)
+            self.buttons[str(choice)] = button
+            layout.addWidget(button)
+            button.clicked.connect(
+                lambda _checked=False, selected=choice: self.valueChanged.emit(
+                    selected
+                )
+            )
+        layout.addStretch(1)
+        self.set_bounds(_bounds, value, emit=False)
+
+    def value(self):
+        return next(
+            (choice for choice, button in self.buttons.items() if button.isChecked()),
+            self.spec.default,
+        )
+
+    def set_bounds(
+        self,
+        _bounds: ParameterBounds,
+        value=None,
+        emit: bool = False,
+    ) -> None:
+        current = str(self.spec.default if value is None else value)
+        button = self.buttons.get(current) or next(iter(self.buttons.values()), None)
+        if button is not None:
+            with QSignalBlocker(button):
+                button.setChecked(True)
         if emit:
             self.valueChanged.emit(self.value())
 

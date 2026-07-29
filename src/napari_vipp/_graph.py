@@ -37,12 +37,17 @@ from qtpy.QtWidgets import (
 )
 
 from napari_vipp._theme import category_color, category_tint
-from napari_vipp.core.pipeline import EXECUTION_BLOCKED, NODE_LIBRARY_BY_ID
+from napari_vipp.core.pipeline import (
+    EXECUTION_BLOCKED,
+    EXECUTION_MUTED,
+    NODE_LIBRARY_BY_ID,
+)
 
 OPERATION_MIME = "application/x-napari-vipp-operation"
 PINNABLE_OUTPUT_TYPES = {"array", "image", "mask", "labels"}
 STALE_EXECUTION_ACCENT = "#f59e0b"
 BLOCKED_EXECUTION_ACCENT = "#b45309"
+MUTED_EXECUTION_ACCENT = "#64748b"
 
 
 class PortLabelMode(StrEnum):
@@ -305,10 +310,13 @@ class NodeCard(QFrame):
             self._manual_execution and not self._auto_recalculate
         )
         self.calculate_button.setEnabled(
-            self._execution_state not in {"running", EXECUTION_BLOCKED}
+            self._execution_state
+            not in {"running", EXECUTION_BLOCKED, EXECUTION_MUTED}
         )
         if self._execution_state == EXECUTION_BLOCKED:
             self.calculate_button.setText("Waiting")
+        elif self._execution_state == EXECUTION_MUTED:
+            self.calculate_button.setText("Inactive branch")
         else:
             self.calculate_button.setText(
                 "Calculate"
@@ -324,7 +332,7 @@ class NodeCard(QFrame):
         visible = (
             self._isolated_tuning
             or self._manual_execution
-            or self._execution_state == "stale"
+            or self._execution_state in {"stale", EXECUTION_MUTED}
         )
         self.execution_label.setVisible(visible)
         self.execution_label.setText(self._execution_summary() if visible else "")
@@ -353,6 +361,12 @@ class NodeCard(QFrame):
                 self._execution_message
                 or "Downstream result is stale; waiting for an upstream manual "
                 "node to be recalculated."
+            )
+            return
+        if self._execution_state == EXECUTION_MUTED:
+            self.setToolTip(
+                self._execution_message
+                or "Muted because its If Else branch is inactive."
             )
             return
         if self._manual_execution and self._execution_state == "not_calculated":
@@ -414,7 +428,15 @@ class NodeCard(QFrame):
             border = "#facc15"
             border_width = 4
             background = "#2a271b"
-        if self._execution_state == EXECUTION_BLOCKED:
+        if self._execution_state == EXECUTION_MUTED:
+            border = MUTED_EXECUTION_ACCENT
+            background = "#171a1f"
+            if self._selected:
+                border_width = 3
+            if self._pinned:
+                border = "#facc15"
+                border_width = 4
+        elif self._execution_state == EXECUTION_BLOCKED:
             border = BLOCKED_EXECUTION_ACCENT
             background = "#21170f"
             if self._selected:
@@ -466,7 +488,11 @@ class NodeCard(QFrame):
         accent_color = self._category_color
         category_background = self._category_tint
         category_color = self._category_color
-        if self._execution_state == EXECUTION_BLOCKED:
+        if self._execution_state == EXECUTION_MUTED:
+            accent_color = MUTED_EXECUTION_ACCENT
+            category_background = "#334155"
+            category_color = "#cbd5e1"
+        elif self._execution_state == EXECUTION_BLOCKED:
             accent_color = BLOCKED_EXECUTION_ACCENT
             category_background = "#431407"
             category_color = "#fdba74"
@@ -549,6 +575,8 @@ class NodeCard(QFrame):
                 if self._auto_recalculate
                 else "Stale cached result"
             )
+        if self._execution_state == EXECUTION_MUTED:
+            return "Muted; inactive branch"
         if self._execution_state == EXECUTION_BLOCKED:
             return "Stale; waiting upstream"
         if self._execution_state == "error":

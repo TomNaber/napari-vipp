@@ -5,7 +5,12 @@ import pytest
 
 from napari_vipp._graph import PipelineGraphView
 from napari_vipp.core.export import export_pipeline_to_python
-from napari_vipp.core.pipeline import GraphConnection, PrototypePipeline
+from napari_vipp.core.pipeline import (
+    EXECUTION_MUTED,
+    EXECUTION_READY,
+    GraphConnection,
+    PrototypePipeline,
+)
 from napari_vipp.core.workflow import deserialize_workflow, serialize_workflow
 
 
@@ -48,6 +53,50 @@ def test_split_channels_defaults_to_three_output_ports():
         "channel_3",
     ]
     assert [port.label for port in ports] == ["Ch 1", "Ch 2", "Ch 3"]
+
+
+def test_if_else_has_labeled_type_preserving_ports_and_skips_inactive_branch():
+    pipeline = PrototypePipeline()
+    pipeline.reset_empty_graph()
+    condition = pipeline.add_node("if_else")
+    inactive = pipeline.add_node("gaussian_blur")
+    inactive_descendant = pipeline.add_node("median_filter")
+    active = pipeline.add_node("gaussian_blur")
+    pipeline.set_param(condition.id, "value", "special.ims")
+    assert pipeline.connect("input", condition.id).success
+    assert pipeline.connect(condition.id, inactive.id, source_port=0).success
+    assert pipeline.connect(inactive.id, inactive_descendant.id).success
+    assert pipeline.connect(condition.id, active.id, source_port=1).success
+
+    image = np.arange(25, dtype=np.float32).reshape(5, 5)
+    pipeline.run(image, input_name="ordinary.ims")
+
+    ports = pipeline.output_ports(condition.id)
+    assert [port.label for port in ports] == ["If", "Else"]
+    assert {port.output_type for port in ports} == {"image"}
+    assert pipeline.node_outputs[condition.id][0] is None
+    assert pipeline.node_outputs[condition.id][1] is image
+    assert pipeline.node_output_states[condition.id][1].source_name == "ordinary.ims"
+    assert pipeline.node_execution_states[condition.id] == EXECUTION_READY
+    assert pipeline.node_execution_states[inactive.id] == EXECUTION_MUTED
+    assert pipeline.node_execution_states[inactive_descendant.id] == EXECUTION_MUTED
+    assert pipeline.outputs[inactive.id] is None
+    assert pipeline.outputs[inactive_descendant.id] is None
+    assert "inactive" in pipeline.node_execution_messages[inactive_descendant.id]
+    assert pipeline.node_execution_states[active.id] == EXECUTION_READY
+    assert pipeline.is_conditionally_inactive(inactive.id)
+    assert pipeline.is_conditionally_inactive(inactive_descendant.id)
+    assert not pipeline.is_conditionally_inactive(active.id)
+
+    pipeline.run(
+        image,
+        input_name="ordinary.ims",
+        retain_node_ids={active.id, inactive_descendant.id},
+        prune_unretained=True,
+    )
+
+    assert pipeline.node_execution_states[inactive.id] == EXECUTION_MUTED
+    assert pipeline.node_execution_states[inactive_descendant.id] == EXECUTION_MUTED
 
 
 def test_split_channels_preserves_mask_output_type_for_downstream_labels():

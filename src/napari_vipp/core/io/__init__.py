@@ -12,6 +12,7 @@ from napari_vipp.core.io.model import (
     ImageDataset,
     ImageSeriesInfo,
     SourceInspection,
+    image_dataset_source_name,
 )
 from napari_vipp.core.io.ome_zarr import write_ome_zarr_analysis_dataset
 from napari_vipp.core.io.registry import (
@@ -33,6 +34,7 @@ __all__ = [
     "SourceInspection",
     "detect_deconvolution_metadata",
     "inspect_image_source",
+    "image_dataset_source_name",
     "read_image",
     "write_image",
     "write_ome_zarr_analysis_dataset",

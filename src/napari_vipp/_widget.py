@@ -197,6 +197,7 @@ from napari_vipp.core.pipeline import (
     DEFAULT_DYNAMIC_OUTPUT_PORTS,
     EXECUTION_BLOCKED,
     EXECUTION_ERROR,
+    EXECUTION_MUTED,
     EXECUTION_NOT_CALCULATED,
     EXECUTION_READY,
     EXECUTION_RUNNING,
@@ -308,6 +309,7 @@ from napari_vipp.ui.controls import (
     NumericEntryControl,
     ParameterBounds,
     ParameterControl,
+    RadioChoiceControl,
     TextControl,
     _slider_safe_bounds,
 )
@@ -7372,7 +7374,7 @@ class VippWidget(QWidget):
                 node_id,
                 EXECUTION_NOT_CALCULATED,
             )
-            not in {EXECUTION_READY, EXECUTION_RUNNING}
+            not in {EXECUTION_READY, EXECUTION_RUNNING, EXECUTION_MUTED}
         }
 
     def _manual_node_ids_requiring_attention(self) -> set[str]:
@@ -7469,11 +7471,13 @@ class VippWidget(QWidget):
         with QSignalBlocker(self.auto_recalculate_checkbox):
             self.auto_recalculate_checkbox.setChecked(auto_recalculate)
         self.calculate_button.setEnabled(
-            state not in {EXECUTION_RUNNING, EXECUTION_BLOCKED}
+            state not in {EXECUTION_RUNNING, EXECUTION_BLOCKED, EXECUTION_MUTED}
         )
         self.calculate_button.setHidden(auto_recalculate)
         if state == EXECUTION_BLOCKED:
             self.calculate_button.setText("Waiting upstream")
+        elif state == EXECUTION_MUTED:
+            self.calculate_button.setText("Inactive branch")
         else:
             self.calculate_button.setText(
                 "Calculate"
@@ -7644,6 +7648,8 @@ class VippWidget(QWidget):
                 "Downstream result is stale; waiting for an upstream manual "
                 "result."
             )
+        if state == EXECUTION_MUTED:
+            return message or "Muted because its If Else branch is inactive."
         if state == EXECUTION_ERROR:
             return message or "Calculation failed."
         return message or "This node calculates only when requested."
@@ -7725,6 +7731,8 @@ class VippWidget(QWidget):
                 control_class = NumericEntryControl
             elif spec.kind == "choice":
                 control_class = ChoiceControl
+            elif spec.kind == "radio":
+                control_class = RadioChoiceControl
             elif spec.kind == "text":
                 control_class = TextControl
             elif spec.kind == "bool":
@@ -10240,7 +10248,7 @@ class VippWidget(QWidget):
         return self._label_filter_spatial_ndim(node_id, np.asarray(data))
 
     def _parameter_bounds_for(self, node_id: str, spec) -> ParameterBounds:
-        if spec.kind == "choice":
+        if spec.kind in {"choice", "radio"}:
             return ParameterBounds(0, max(len(spec.choices) - 1, 0), 1, 0)
         node = self.pipeline.nodes.get(node_id)
         if (
@@ -11335,10 +11343,22 @@ class VippWidget(QWidget):
         output_states,
     ):
         node = self.pipeline.nodes.get(node_id)
-        if node is None or node.operation_id != "split_channels":
+        if node is None:
             return primary_data, primary_state, 0
         outputs = list(outputs or [])
         output_states = list(output_states or [])
+        if node.operation_id == "if_else":
+            for index, output in enumerate(outputs):
+                if output is not None:
+                    state = (
+                        output_states[index]
+                        if index < len(output_states)
+                        else primary_state
+                    )
+                    return output, state, index
+            return primary_data, primary_state, 0
+        if node.operation_id != "split_channels":
+            return primary_data, primary_state, 0
         if not outputs:
             return primary_data, primary_state, 0
         index = self._split_channel_display_port(node_id, len(outputs))

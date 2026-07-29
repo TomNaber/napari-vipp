@@ -181,7 +181,7 @@ def test_export_produces_valid_python():
     _assert_embedded_operation(code, "otsu_threshold")
     assert '"sigma":1.2' in code
     assert "pipeline_from_workflow(json.loads(_WORKFLOW_JSON))" in code
-    assert "ImageDataset, read_image, write_image" in code
+    assert "image_dataset_source_name" in code
     assert "skimage" not in code
 
 
@@ -200,6 +200,29 @@ def test_exported_run_pipeline_executes():
     assert results["threshold"].shape == image.shape
     assert results["threshold"].dtype == bool
     assert namespace["OUTPUT_NODES"] == ("threshold",)
+
+
+def test_exported_if_else_pipeline_routes_by_input_name():
+    pipeline = PrototypePipeline()
+    pipeline.reset_empty_graph()
+    condition = pipeline.add_node("if_else")
+    if_branch = pipeline.add_node("gaussian_blur")
+    else_branch = pipeline.add_node("gaussian_blur")
+    pipeline.set_param(condition.id, "value", "special.ims")
+    assert pipeline.connect("input", condition.id).success
+    assert pipeline.connect(condition.id, if_branch.id, source_port=0).success
+    assert pipeline.connect(condition.id, else_branch.id, source_port=1).success
+
+    code = export_pipeline_to_python(pipeline)
+    namespace: dict[str, object] = {"__name__": "exported_pipeline"}
+    exec(compile(code, "<exported>", "exec"), namespace)
+    results = namespace["run_pipeline"](
+        np.ones((4, 5), dtype=np.float32),
+        input_name="special.ims",
+    )
+
+    assert results[if_branch.id] is not None
+    assert results[else_branch.id] is None
 
 
 def test_export_preserves_scalar_channel_contract_with_pipeline_parity():

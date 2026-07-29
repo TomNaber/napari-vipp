@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Conditional Routing
+
+- Added a batch-ready `If Else` node under `Image Data → Math & Logic`. It
+  routes an input through labeled `If` or `Else` ports using exact source-name
+  matching, including napari layer names, single-file names, and selected
+  multi-image series names. Nodes downstream of the inactive route are muted,
+  and inactive batch outputs are recorded as not applicable instead of failed.
+
 ### Imaris Checkpoints
 
 - LIF-to-IMS checkpoints now synthesize an Imaris `/DataSetInfo` tree from the

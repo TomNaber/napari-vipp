@@ -4030,6 +4030,42 @@ def split_channels(
     return [moved[..., index].copy() for index in range(count)]
 
 
+def if_else(
+    data,
+    field: str = "Name",
+    condition: str = "Does",
+    match: str = "Equal",
+    value: str = "",
+    source_name: str = "",
+):
+    """Route an input to one of two outputs using its carried source name."""
+    if field != "Name":
+        raise ValueError("If Else currently supports only the Name field.")
+    name = str(source_name)
+    expected = str(value)
+    if not name.strip():
+        raise ValueError("If Else needs a non-empty source Name.")
+    if not expected.strip():
+        raise ValueError("If Else needs non-empty comparison text.")
+
+    if match == "Equal":
+        matched = name == expected
+    elif match == "Start with":
+        matched = name.startswith(expected)
+    elif match == "End with":
+        matched = name.endswith(expected)
+    elif match == "Contain":
+        matched = expected in name
+    else:
+        raise ValueError(f"Unsupported If Else match mode: {match!r}.")
+
+    if condition == "Does not":
+        matched = not matched
+    elif condition != "Does":
+        raise ValueError(f"Unsupported If Else condition: {condition!r}.")
+    return (data, None) if matched else (None, data)
+
+
 def split_axis(
     data,
     axis: str = "axis:0",

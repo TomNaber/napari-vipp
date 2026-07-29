@@ -14,6 +14,7 @@ from napari_vipp.core.io import (
     ImageDataset,
     ImageSeriesInfo,
     SourceInspection,
+    image_dataset_source_name,
 )
 from napari_vipp.core.metadata import (
     AcquisitionMetadata,
@@ -101,6 +102,7 @@ def test_frozen_file_snapshot_is_owned_read_only_and_preserves_state(tmp_path):
     assert not np.shares_memory(frozen, backing)
     np.testing.assert_array_equal(frozen, backing)
     assert snapshot.payload.revision_token is snapshot.identity
+    assert snapshot.payload.name == "source.fake"
     assert snapshot.payload.metadata == {
         "vipp_source_path": str(source.resolve()),
         "vipp_source_identity": snapshot.identity.to_dict(),
@@ -126,6 +128,17 @@ def test_frozen_file_snapshot_is_owned_read_only_and_preserves_state(tmp_path):
     np.testing.assert_array_equal(frozen, expected)
     with pytest.raises(ValueError, match="read-only"):
         frozen[0, 0] = 1
+
+
+def test_dataset_source_name_uses_selected_name_for_multi_image_container(tmp_path):
+    dataset = _dataset(tmp_path / "collection.fake", np.ones((2, 3)))
+    other = replace(dataset.selected_series, index=3, key="series-3", name="Other")
+    multi = replace(
+        dataset,
+        inspection=replace(dataset.inspection, series=(dataset.selected_series, other)),
+    )
+
+    assert image_dataset_source_name(multi) == "Selected series"
 
 
 def test_frozen_file_snapshot_rejects_expected_revision_mismatch(tmp_path):
