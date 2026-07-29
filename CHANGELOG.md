@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Imaris Checkpoints
+
+- LIF-to-IMS checkpoints now synthesize an Imaris `/DataSetInfo` tree from the
+  selected Leica series. Recording time, stage-aware global extents, image and
+  experiment identity, objective and immersion properties, channel colours,
+  wavelengths, pinhole values, and the raw Leica channel/dimension layout are
+  retained while the writer truthfully identifies napari-VIPP and liffile.
+- IMS-to-IMS processing preserves that tree, or a native source IMS tree,
+  through repeated checkpoints. Only metadata tied to processed pixels or
+  explicit Pixel Size and Microscope Metadata edits is regenerated. Capture
+  happens before writing, including for in-place output, and fails closed if
+  the required source metadata cannot be decoded.
+
 ### Channel Metadata
 
 - Added `Assign Channel Names` under `Image Data → Channels & Composites`, with

@@ -80,17 +80,36 @@ the first Image Source node is used as the folder input for convenience.
 | OME-TIFF | A portable single processed image with OME-XML metadata is required. This is the default quick-save format. |
 | ImageJ TIFF | Direct ImageJ/Fiji hyperstack behavior is the priority. Binary masks are written as `uint8` values `0` and `255`. |
 | TIFF | Broad TIFF compatibility or preservation of 32-bit integer label IDs is required. |
-| Imaris IMS | A processed dataset should open directly in Imaris. Native export is optional and currently packaged for macOS arm64. It accepts `uint8`, `uint16`, `uint32`, and `float32` without implicit conversion. |
+| Imaris IMS | A compressed, metadata-preserving checkpoint or a processed dataset that should open directly in Imaris is required. Native export is optional and currently packaged for macOS arm64. It accepts `uint8`, `uint16`, `uint32`, and `float32` without implicit conversion. |
 | NPY | Exact array exchange is needed and scientific image metadata is not required. |
 | PNG/JPEG/BMP/GIF/WebP/TGA/PNM | A 2D display image is needed. PNG can preserve 16-bit grayscale values and label IDs up to 65535; JPEG/WebP/BMP/GIF/TGA-style outputs are 8-bit display exports. JPEG cannot store alpha. |
 
 ImageJ TIFF cannot safely represent 32-bit integer label IDs. Use conventional
 TIFF, OME-TIFF, or Export OME Analysis Dataset for those labels.
 
-IMS export creates a new image dataset with fresh resolution pyramids. It
-preserves representable TCZYX calibration, channel metadata, acquisition time,
-and VIPP provenance, but it does not copy Imaris Surpass objects, annotations,
-or the source file's original pyramid levels.
+When a selected LIF series is saved as IMS, VIPP converts its embedded Leica
+XML into the Imaris `/DataSetInfo` parameter structure. This retains the
+original recording timestamp and format, element and experiment identity,
+stage-aware global extents, microscope properties, LUT colours, spectral and
+pinhole values, and the raw Leica channel/dimension layout. `Creator` and
+`Version` truthfully identify napari-VIPP, `FileName` identifies the current
+LIF, and `OriginalFormatFileIOVersion` identifies liffile rather than claiming
+that Imaris Convert wrote the checkpoint.
+
+When an IMS input is saved as IMS, VIPP copies its complete `/DataSetInfo`
+parameter tree into the new file. Fields that describe the processed pixels or
+were changed by Pixel Size or Microscope Metadata nodes are regenerated from
+the carried image state; unrelated vendor metadata remains unchanged through
+repeated IMS checkpoints. Leica channel and dimension layout parameters remain
+as acquisition provenance; the actual processed dtype and storage layout in
+the IMS datasets are authoritative. Metadata is captured before the
+destination is opened, so an in-place save cannot erase the source parameters
+first. If the selected LIF timestamp or physical dimensions, or a source IMS
+tree, cannot be decoded, export stops before writing an incomplete checkpoint.
+
+IMS export creates fresh, losslessly compressed image blocks and resolution
+pyramids. It does not copy the source pyramid blocks, thumbnails, Imaris
+Surpass objects, scenes, or annotations; those are outside `/DataSetInfo`.
 
 ## Collection Batch Runs
 

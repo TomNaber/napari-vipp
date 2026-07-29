@@ -28,9 +28,7 @@ from napari_vipp.core.pipeline import PrototypePipeline, SourcePayload
 
 
 def test_ome_tiff_round_trip_preserves_axes_scale_and_channels(tmp_path):
-    data = np.arange(2 * 3 * 4 * 8 * 9, dtype=np.uint16).reshape(
-        2, 3, 4, 8, 9
-    )
+    data = np.arange(2 * 3 * 4 * 8 * 9, dtype=np.uint16).reshape(2, 3, 4, 8, 9)
     state = image_state_from_array(
         data,
         axes=(
@@ -175,7 +173,7 @@ def test_common_raster_sources_read_png_and_jpeg(tmp_path):
 
 
 def test_write_image_saves_2d_raster_formats(tmp_path):
-    gray = (np.arange(6 * 7, dtype=np.uint16).reshape(6, 7) * 1000)
+    gray = np.arange(6 * 7, dtype=np.uint16).reshape(6, 7) * 1000
     png_path = tmp_path / "gray.png"
 
     saved = write_image(gray, png_path, format="png")
@@ -437,9 +435,7 @@ def test_nd2_microscope_reader_normalizes_metadata(monkeypatch, tmp_path):
         sizes = MappingProxyType({"T": 2, "Z": 3, "C": 2, "Y": 4, "X": 5})
         attributes = {"bitsPerComponentSignificant": 16}
         experiment = ()
-        text_info = {
-            "Description": "NIS Elements Richardson-Lucy deconvolution"
-        }
+        text_info = {"Description": "NIS Elements Richardson-Lucy deconvolution"}
 
         metadata = SimpleNamespace(
             channels=(
@@ -558,6 +554,34 @@ def test_imaris_pyramid_is_one_highest_resolution_batch_source(
         "_optional_bioio",
         lambda _suffix: SimpleNamespace(BioImage=FakeBioImage),
     )
+    monkeypatch.setattr(
+        microscope_io,
+        "read_imaris_dataset_info",
+        lambda _path: {
+            "Image": {
+                "ExtMin0": "10",
+                "ExtMax0": "14",
+                "ExtMin1": "20",
+                "ExtMax1": "24",
+                "ExtMin2": "30",
+                "ExtMax2": "38",
+                "RecordingDate": "2026-07-17 15:39:36.796",
+                "NumericalAperture": "1.4",
+            },
+            "Channel 0": {
+                "Name": "DAPI",
+                "Color": "0 0 1",
+                "LSMEmissionWavelength": "461",
+                "RefractionIndexImmersion": "1.518",
+            },
+            "Channel 1": {
+                "Name": "FITC",
+                "Color": "0 1 0",
+                "LSMEmissionWavelength": "520",
+                "RefractionIndexImmersion": "1.518",
+            },
+        },
+    )
 
     inspection = inspect_image_source(path)
     loaded = read_image(path)
@@ -571,6 +595,16 @@ def test_imaris_pyramid_is_one_highest_resolution_batch_source(
     assert loaded.selected_series == inspection.series[0]
     assert loaded.data.shape == inspection.series[0].shape
     assert np.all(loaded.data == 1)
+    assert [axis.translation for axis in loaded.image_state.axes[-3:]] == [
+        30.0,
+        20.0,
+        10.0,
+    ]
+    assert loaded.image_state.channels[0].emission_wavelength == 461.0
+    assert loaded.image_state.acquisition.acquisition_date == (
+        "2026-07-17 15:39:36.796"
+    )
+    assert loaded.image_state.acquisition.refractive_index == 1.518
     assert len(batch_items) == 1
     assert batch_items[0].series_index is None
 
@@ -773,9 +807,10 @@ def test_xarray_czi_metadata_normalizes_channels_and_axes():
 
 
 def test_deconvolution_metadata_detection_is_conservative():
-    assert detect_deconvolution_metadata(
-        {"Processing": "Huygens deconvolution"}
-    ) == (True, "Huygens")
+    assert detect_deconvolution_metadata({"Processing": "Huygens deconvolution"}) == (
+        True,
+        "Huygens",
+    )
     assert detect_deconvolution_metadata(
         {"Processing": "no deconvolution applied"}
     ) == (False, "")

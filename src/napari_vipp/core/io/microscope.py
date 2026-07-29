@@ -18,6 +18,10 @@ from xml.etree import ElementTree
 import numpy as np
 
 from napari_vipp.core.channel_colors import channel_color_int
+from napari_vipp.core.io.imaris_metadata import (
+    read_imaris_dataset_info,
+    read_lif_dataset_info,
+)
 from napari_vipp.core.io.model import (
     ImageDataset,
     ImageSeriesInfo,
@@ -364,6 +368,14 @@ def _read_lif(path: Path, series_index: int = 0) -> ImageDataset:
         image = _container_image(getattr(lif, "images", None), selected)
         data, axes, channels, attrs = _scene_payload(image)
         original = getattr(lif, "xml", None) or getattr(lif, "metadata", None)
+    sections = None
+    if path.suffix.lower() == ".lif":
+        sections = read_lif_dataset_info(path, selected.index)
+        axes = _imaris_axes(axes, tuple(int(size) for size in data.shape), sections)
+        channels = _imaris_channels(channels, sections)
+    metadata = {"metadata": original, "attrs": attrs}
+    if sections is not None:
+        metadata = {"imaris_dataset_info": sections, **metadata}
     return _microscope_dataset(
         data,
         path,
@@ -371,7 +383,7 @@ def _read_lif(path: Path, series_index: int = 0) -> ImageDataset:
         selected,
         axes,
         channels,
-        {"metadata": original, "attrs": attrs},
+        metadata,
         metadata_source="Leica metadata",
         reader="liffile",
     )
@@ -500,11 +512,14 @@ def _inspect_bioio(path: Path, format_hint: str) -> SourceInspection:
     if path.suffix.lower() == ".ims":
         series = list(_collapse_imaris_resolution_levels(series))
         _bioio_set_scene(image, series[0].key)
+    metadata = _bioio_metadata(image)
+    if path.suffix.lower() == ".ims":
+        metadata["imaris_dataset_info"] = read_imaris_dataset_info(path)
     return SourceInspection(
         str(path),
         f"{format_hint}+bioio",
         tuple(series),
-        _bioio_metadata(image),
+        metadata,
     )
 
 
@@ -538,8 +553,23 @@ def _read_bioio(path: Path, series_index: int, format_hint: str) -> ImageDataset
     if data is None:
         data = image.data
     metadata = _bioio_metadata(image)
+    imaris_sections: dict[str, dict[str, str]] = {}
+    if path.suffix.lower() == ".ims" and isinstance(
+        inspection.original_metadata, Mapping
+    ):
+        candidate = inspection.original_metadata.get("imaris_dataset_info")
+        if isinstance(candidate, dict):
+            imaris_sections = candidate
+            metadata["imaris_dataset_info"] = candidate
     axes = _bioio_axes(image, tuple(int(size) for size in data.shape))
     channels = _bioio_channels(image)
+    if imaris_sections:
+        axes = _imaris_axes(
+            axes,
+            tuple(int(size) for size in data.shape),
+            imaris_sections,
+        )
+        channels = _imaris_channels(channels, imaris_sections)
     acquisition = _acquisition_from_metadata(metadata)
     source_format = f"{format_hint}+bioio"
     source = SourceMetadata(
@@ -609,9 +639,7 @@ def _optional_bioio(suffix: str = ""):
             format_name=_FORMAT_BY_SUFFIX.get(normalized_suffix, ""),
             module_name="bioio",
             install_command=command,
-            fallback_install_command=(
-                _BIOIO_INSTALL_COMMAND if native_command else ""
-            ),
+            fallback_install_command=(_BIOIO_INSTALL_COMMAND if native_command else ""),
         ) from error
 
 
@@ -967,6 +995,92 @@ def _bioio_channels(image) -> tuple[ChannelMetadata, ...]:
     return _channels_from_labels(getattr(image, "channel_names", None) or ())
 
 
+def _imaris_axes(
+    axes: tuple[AxisMetadata, ...],
+    shape: tuple[int, ...],
+    sections: Mapping[str, Mapping[str, str]],
+) -> tuple[AxisMetadata, ...]:
+    image = sections.get("Image", {})
+    extent_index = {"x": 0, "y": 1, "z": 2}
+    updated = []
+    for axis, size in zip(axes, shape, strict=True):
+        index = extent_index.get(axis.name.strip().casefold())
+        if index is None:
+            updated.append(axis)
+            continue
+        minimum = _optional_float(image.get(f"ExtMin{index}"))
+        maximum = _optional_float(image.get(f"ExtMax{index}"))
+        if minimum is None or maximum is None or maximum <= minimum:
+            updated.append(axis)
+            continue
+        updated.append(
+            replace(
+                axis,
+                unit="micrometer",
+                scale=(maximum - minimum) / int(size),
+                translation=minimum,
+            )
+        )
+    return tuple(updated)
+
+
+def _imaris_channels(
+    channels: tuple[ChannelMetadata, ...],
+    sections: Mapping[str, Mapping[str, str]],
+) -> tuple[ChannelMetadata, ...]:
+    indexed = {
+        int(match.group(1)): values
+        for name, values in sections.items()
+        if (match := re.fullmatch(r"Channel\s+(\d+)", name)) is not None
+    }
+    count = len(channels) or (max(indexed, default=-1) + 1)
+    updated = []
+    for index in range(count):
+        channel = channels[index] if index < len(channels) else ChannelMetadata()
+        values = indexed.get(index, {})
+        name = str(values.get("Name", "")).strip("\x00") or channel.name
+        color = _imaris_color(values.get("Color"))
+        excitation = _optional_float(values.get("LSMExcitationWavelength"))
+        emission = _optional_float(values.get("LSMEmissionWavelength"))
+        updated.append(
+            replace(
+                channel,
+                name=name,
+                color=color if color is not None else channel.color,
+                excitation_wavelength=(
+                    excitation
+                    if excitation is not None
+                    else channel.excitation_wavelength
+                ),
+                excitation_wavelength_unit=(
+                    "nanometer"
+                    if excitation is not None
+                    else channel.excitation_wavelength_unit
+                ),
+                emission_wavelength=(
+                    emission if emission is not None else channel.emission_wavelength
+                ),
+                emission_wavelength_unit=(
+                    "nanometer"
+                    if emission is not None
+                    else channel.emission_wavelength_unit
+                ),
+            )
+        )
+    return tuple(updated)
+
+
+def _imaris_color(value: Any) -> int | None:
+    try:
+        components = [float(part) for part in str(value or "").split()[:3]]
+    except (TypeError, ValueError):
+        return None
+    if len(components) != 3 or not all(np.isfinite(components)):
+        return None
+    rgb = np.clip(np.rint(np.asarray(components) * 255.0), 0, 255).astype(np.uint8)
+    return (int(rgb[0]) << 16) | (int(rgb[1]) << 8) | int(rgb[2])
+
+
 def _axes_from_xarray(
     xarray,
     dims: tuple[str, ...],
@@ -1128,6 +1242,7 @@ def _acquisition_from_metadata(metadata: Any) -> AcquisitionMetadata:
                 "acquisitionDate",
                 "acquisition_date",
                 "AcquisitionDate",
+                "RecordingDate",
                 "dateTime",
                 "timestamp",
             ),
@@ -1141,7 +1256,17 @@ def _acquisition_from_metadata(metadata: Any) -> AcquisitionMetadata:
                 "ObjectiveName",
             ),
         ),
-        instrument=_first_text(metadata, ("instrument", "microscope", "system")),
+        instrument=_first_text(
+            metadata,
+            (
+                "MicroscopeModality",
+                "MicroscopeModel",
+                "SystemTypeName",
+                "instrument",
+                "microscope",
+                "system",
+            ),
+        ),
         detector=_first_text(metadata, ("detector", "camera", "Detector")),
         objective_na=_first_number(
             metadata,
@@ -1159,11 +1284,17 @@ def _acquisition_from_metadata(metadata: Any) -> AcquisitionMetadata:
                 "objectiveMagnification",
                 "nominalMagnification",
                 "magnification",
+                "LensPower",
             ),
         ),
         objective_immersion=_first_text(
             metadata,
-            ("immersion", "immersionType", "objectiveImmersion"),
+            (
+                "ObjectiveImmersion",
+                "immersion",
+                "immersionType",
+                "objectiveImmersion",
+            ),
         ),
         refractive_index=_first_number(
             metadata,
@@ -1171,6 +1302,8 @@ def _acquisition_from_metadata(metadata: Any) -> AcquisitionMetadata:
                 "refractiveIndex",
                 "refractive_index",
                 "immersionRefractiveIndex",
+                "RefractionIndex",
+                "RefractionIndexImmersion",
             ),
         ),
         deconvolution_applied=deconvolved,
@@ -1332,10 +1465,7 @@ def _axes_from_order(order: str, shape: tuple[int, ...]) -> tuple[AxisMetadata, 
     labels = _split_axis_order(order)
     if len(labels) != len(shape):
         labels = _split_axis_order(_fallback_axis_order(shape))
-    return tuple(
-        AxisMetadata(_axis_name(label), _axis_type(label))
-        for label in labels
-    )
+    return tuple(AxisMetadata(_axis_name(label), _axis_type(label)) for label in labels)
 
 
 def _fallback_axis_order(shape: tuple[int, ...]) -> str:

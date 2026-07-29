@@ -80,6 +80,8 @@ bioformats = [
 ims = [
     "bioio>=3.4",
     "bioio-bioformats",
+    "h5py>=3.11",
+    "liffile[all]>=2026.4.11; python_version >= '3.12'",
     "napari-vipp-imaris>=0.1.0a1; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 microscope = [
