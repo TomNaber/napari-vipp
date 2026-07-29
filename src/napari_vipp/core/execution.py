@@ -46,6 +46,7 @@ class PipelineRunRequest:
     target_node_ids: frozenset[str] | None = None
     retain_node_ids: frozenset[str] = frozenset()
     prune_unretained: bool = False
+    continue_independent_branches: bool = False
     cancel_event: threading.Event | None = None
     source_revisions: tuple[object, ...] = ()
 
@@ -142,6 +143,7 @@ def execute_pipeline_request(
             target_node_ids=request.target_node_ids,
             retain_node_ids=request.retain_node_ids,
             prune_unretained=request.prune_unretained,
+            continue_independent_branches=request.continue_independent_branches,
         )
     except OperationCancelled as exc:
         return PipelineRunResult(

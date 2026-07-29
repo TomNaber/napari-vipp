@@ -27,12 +27,13 @@ class SourceFileLoadSpec:
 
 @dataclass(frozen=True, slots=True)
 class SourceFileLoadResult:
-    """All snapshots from one atomic UI load attempt, or one explicit error."""
+    """Snapshots and branch-local errors from one UI load attempt."""
 
     run_id: int
     snapshots: dict[tuple[object, ...], SourceFileSnapshot]
     error: str = ""
     node_id: str = ""
+    errors: dict[tuple[object, ...], str] | None = None
 
 
 class SourceFileLoadSignals(QObject):
@@ -57,11 +58,10 @@ class SourceFileLoadWorker(QRunnable):
 
     def run(self) -> None:
         snapshots: dict[tuple[object, ...], SourceFileSnapshot] = {}
+        errors: dict[tuple[object, ...], str] = {}
         loaded_identities: dict[str, LocalSourceIdentity] = {}
-        current_node_id = ""
-        try:
-            for spec in self.specs:
-                current_node_id = spec.node_id
+        for spec in self.specs:
+            try:
                 expected_identity = spec.expected_identity or loaded_identities.get(
                     spec.path
                 )
@@ -73,17 +73,11 @@ class SourceFileLoadWorker(QRunnable):
                 )
                 snapshots[spec.cache_key] = snapshot
                 loaded_identities[spec.path] = snapshot.identity
-        except Exception as exc:
-            self.signals.finished.emit(
-                SourceFileLoadResult(
-                    self.run_id,
-                    {},
-                    str(exc),
-                    current_node_id,
-                )
-            )
-            return
-        self.signals.finished.emit(SourceFileLoadResult(self.run_id, snapshots))
+            except Exception as exc:
+                errors[spec.cache_key] = str(exc)
+        self.signals.finished.emit(
+            SourceFileLoadResult(self.run_id, snapshots, errors=errors)
+        )
 
 
 __all__ = [

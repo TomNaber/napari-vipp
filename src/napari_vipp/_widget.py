@@ -974,6 +974,7 @@ class VippWidget(QWidget):
             tuple[object, ...],
             SourceFileSnapshot,
         ] = {}
+        self._file_source_payload_errors: dict[tuple[object, ...], str] = {}
         self._file_source_path_identities: dict[str, LocalSourceIdentity] = {}
         self._interactive_collection_source_paths: dict[str, Path] = {}
         self._interactive_collection_source_series_indices: dict[str, int] = {}
@@ -5413,6 +5414,7 @@ class VippWidget(QWidget):
     def _clear_file_source_snapshots(self, *, invalidate_inflight: bool) -> None:
         """Drop pinned file revisions; optionally make all older loads stale."""
         self._file_source_payload_cache.clear()
+        self._file_source_payload_errors.clear()
         self._file_source_path_identities.clear()
         self._source_inspection_cache.clear()
         if not invalidate_inflight:
@@ -5796,6 +5798,7 @@ class VippWidget(QWidget):
                         (
                             node_id,
                             payload.name,
+                            payload.error,
                             (
                                 "revision",
                                 payload.revision_token.layer_id,
@@ -6301,7 +6304,12 @@ class VippWidget(QWidget):
             if not self._file_source_should_load_async(node):
                 continue
             key = self._file_source_cache_key(node)
-            if key is None or key in self._file_source_payload_cache or key in seen:
+            if (
+                key is None
+                or key in self._file_source_payload_cache
+                or key in self._file_source_payload_errors
+                or key in seen
+            ):
                 continue
             seen.add(key)
             resolved_path = str(key[0])
@@ -6390,6 +6398,7 @@ class VippWidget(QWidget):
                 "load the new revision."
             )
         self._file_source_payload_cache[key] = snapshot
+        self._file_source_payload_errors.pop(key, None)
         self._file_source_path_identities[resolved_path] = snapshot.identity
         self._source_inspection_cache[resolved_path] = VerifiedSourceInspection(
             snapshot.inspection,
@@ -6427,6 +6436,9 @@ class VippWidget(QWidget):
         for key in tuple(self._file_source_payload_cache):
             if str(key[0]) in batch_paths and key not in retained_keys:
                 self._file_source_payload_cache.pop(key, None)
+        for key in tuple(self._file_source_payload_errors):
+            if str(key[0]) in batch_paths and key not in retained_keys:
+                self._file_source_payload_errors.pop(key, None)
 
     def _source_payloads_for_pipeline(
         self,
@@ -6437,7 +6449,20 @@ class VippWidget(QWidget):
         for node_id, node in self.pipeline.nodes.items():
             if node.operation_id != "input":
                 continue
-            payload, layer = self._resolve_source_payload(node)
+            try:
+                payload, layer = self._resolve_source_payload(node)
+            except Exception as exc:
+                if isinstance(exc, OptionalMicroscopeReaderError):
+                    self._show_optional_reader_error(exc)
+                layer_name = str(node.params.get("layer_name", "")).strip()
+                if not layer_name:
+                    layer_name = self._default_input_layer_name()
+                layer = self._layer_by_name(layer_name) if layer_name else None
+                payload = SourcePayload(
+                    None,
+                    name=(str(getattr(layer, "name", "")) or node.title),
+                    error=str(exc),
+                )
             if payload is not None:
                 payloads[node_id] = payload
             if layer is not None:
@@ -6465,6 +6490,9 @@ class VippWidget(QWidget):
             cached = self._cached_file_source_payload(node)
             if cached is not None:
                 return cached, None
+            error = self._file_source_payload_errors.get(key)
+            if error:
+                return SourcePayload(None, name=source_path.name, error=error), None
             if self._file_source_should_load_async(node):
                 return None, None
             resolved_path = str(source_path)
@@ -7344,7 +7372,10 @@ class VippWidget(QWidget):
             self._clear_active_pin(status=False)
         if self._selected_node_id == node_id:
             self._select_first_available_node()
-        if self._mark_pipeline_branches_dirty(dirty_targets):
+        should_run = self._mark_pipeline_branches_dirty(dirty_targets)
+        if self._active_pipeline_run_id is not None:
+            should_run = True
+        if should_run:
             self.run_pipeline()
         self._sync_execution_ui()
         self._push_undo_if_changed(before)
@@ -13105,6 +13136,7 @@ class VippWidget(QWidget):
                     prune_unretained=(
                         self._cache_pruning_enabled() and target_node_ids is None
                     ),
+                    continue_independent_branches=True,
                 )
         except Exception as exc:
             for node_id in manual_node_ids or ():
@@ -13148,6 +13180,7 @@ class VippWidget(QWidget):
                             self._cache_pruning_enabled()
                             and target_node_ids is None
                         ),
+                        continue_independent_branches=True,
                     )
         self._complete_pipeline_run(source_signature, dirty_node_ids)
         self._finish_pipeline_update(primary_layer, source_label)
@@ -13179,6 +13212,11 @@ class VippWidget(QWidget):
         self._update_histogram()
         self._sync_execution_ui()
         memory_guard_message = self._enforce_memory_guard()
+        error_node_ids = [
+            node_id
+            for node_id in self.pipeline.topological_order()
+            if self.pipeline.node_execution_states.get(node_id) == EXECUTION_ERROR
+        ]
         snapshot_note = (
             " File source snapshots are pinned until Refresh."
             if self._has_active_file_source_snapshot()
@@ -13186,6 +13224,24 @@ class VippWidget(QWidget):
         )
         if memory_guard_message:
             self.status_label.setText(f"{memory_guard_message}{snapshot_note}")
+        elif error_node_ids:
+            count = len(error_node_ids)
+            first_error_id = error_node_ids[0]
+            first_error = self.pipeline.node_execution_messages.get(
+                first_error_id,
+                "Calculation failed.",
+            )
+            failure_summary = (
+                "Skipped failed branch at"
+                if count == 1
+                else f"Skipped {count} failed branches. First error at"
+            )
+            self.status_label.setText(
+                f"{failure_summary} "
+                f"'{self._node_title(first_error_id)}': {first_error} "
+                "Independent branches were calculated; see each red node for "
+                "its error."
+            )
         elif (
             self._isolated_tuning_node_id in self.pipeline.nodes
             and self._isolated_tuning_has_changes
@@ -13282,22 +13338,13 @@ class VippWidget(QWidget):
                     result.error,
                 )
             return
-        try:
-            for key, snapshot in result.snapshots.items():
+        errors = dict(result.errors or {})
+        for key, snapshot in result.snapshots.items():
+            try:
                 self._cache_file_source_snapshot(key, snapshot)
-        except Exception as exc:
-            self._sync_execution_ui()
-            self._set_pipeline_busy(False)
-            self.status_label.setText(f"Image source error: {exc}")
-            if self._source_load_pending:
-                self._source_load_pending = False
-                QTimer.singleShot(0, self.run_pipeline)
-            else:
-                self._show_interactive_collection_batch_preview_error(
-                    self._interactive_collection_batch_requested_index,
-                    str(exc),
-                )
-            return
+            except Exception as exc:
+                errors[key] = str(exc)
+        self._file_source_payload_errors.update(errors)
         self._prune_file_source_payload_cache()
         self._set_pipeline_busy(False)
         self._source_load_pending = False
@@ -13495,6 +13542,7 @@ class VippWidget(QWidget):
             prune_unretained=(
                 self._cache_pruning_enabled() and target_node_ids is None
             ),
+            continue_independent_branches=True,
             cancel_event=cancel_event,
             source_revisions=tuple(
                 dict.fromkeys(
@@ -13705,7 +13753,8 @@ class VippWidget(QWidget):
             )
             return
         if result.error:
-            self.pipeline.set_node_execution_error(processing_node_id, result.error)
+            failed_node_id = self._active_pipeline_node_id or processing_node_id
+            self.pipeline.set_node_execution_error(failed_node_id, result.error)
             continue_pending = bool(self._pipeline_run_pending and pending_dirty)
             self._pipeline_run_pending = False
             self._inflight_dirty_node_ids = None

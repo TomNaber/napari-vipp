@@ -39,6 +39,7 @@ from qtpy.QtWidgets import (
 from napari_vipp._theme import category_color, category_tint
 from napari_vipp.core.pipeline import (
     EXECUTION_BLOCKED,
+    EXECUTION_ERROR,
     EXECUTION_MUTED,
     NODE_LIBRARY_BY_ID,
 )
@@ -332,7 +333,7 @@ class NodeCard(QFrame):
         visible = (
             self._isolated_tuning
             or self._manual_execution
-            or self._execution_state in {"stale", EXECUTION_MUTED}
+            or self._execution_state in {"stale", EXECUTION_ERROR, EXECUTION_MUTED}
         )
         self.execution_label.setVisible(visible)
         self.execution_label.setText(self._execution_summary() if visible else "")
@@ -368,6 +369,9 @@ class NodeCard(QFrame):
                 self._execution_message
                 or "Muted because its If Else branch is inactive."
             )
+            return
+        if self._execution_state == EXECUTION_ERROR:
+            self.setToolTip(self._execution_message or "Calculation failed.")
             return
         if self._manual_execution and self._execution_state == "not_calculated":
             if self._auto_recalculate:
@@ -452,6 +456,14 @@ class NodeCard(QFrame):
             if self._pinned:
                 border = "#facc15"
                 border_width = 4
+        elif self._execution_state == EXECUTION_ERROR:
+            border = "#ef4444"
+            background = "#2f1d1d"
+            if self._selected:
+                border_width = 3
+            if self._pinned:
+                border = "#facc15"
+                border_width = 4
         elif self._manual_execution:
             if self._execution_state == "ready":
                 border = "#22c55e"
@@ -459,9 +471,6 @@ class NodeCard(QFrame):
             elif self._execution_state == "not_calculated":
                 border = STALE_EXECUTION_ACCENT
                 background = "#2a2416"
-            elif self._execution_state == "error":
-                border = "#ef4444"
-                background = "#2f1d1d"
             if self._selected:
                 border_width = 3
             if self._pinned:
@@ -500,6 +509,10 @@ class NodeCard(QFrame):
             accent_color = STALE_EXECUTION_ACCENT
             category_background = "#78350f"
             category_color = "#fde68a"
+        elif self._execution_state == EXECUTION_ERROR:
+            accent_color = "#ef4444"
+            category_background = "#7f1d1d"
+            category_color = "#fecaca"
         elif self._manual_execution:
             if self._execution_state == "ready":
                 accent_color = "#22c55e"
@@ -509,10 +522,6 @@ class NodeCard(QFrame):
                 accent_color = STALE_EXECUTION_ACCENT
                 category_background = "#78350f"
                 category_color = "#fde68a"
-            elif self._execution_state == "error":
-                accent_color = "#ef4444"
-                category_background = "#7f1d1d"
-                category_color = "#fecaca"
         if self._isolated_tuning and self._execution_state != "error":
             accent_color = STALE_EXECUTION_ACCENT
             category_background = "#78350f"

@@ -146,7 +146,7 @@ from napari_vipp.core.operations import (
     validated_mask_crop,
     yen_threshold,
 )
-from napari_vipp.core.progress import ProgressContext
+from napari_vipp.core.progress import OperationCancelled, ProgressContext
 from napari_vipp.core.tables import TableState, table_state_from_data
 
 
@@ -875,6 +875,7 @@ class SourcePayload:
     name: str = ""
     image_state: ImageState | None = None
     revision_token: object | None = None
+    error: str = ""
 
 
 @dataclass
@@ -5324,6 +5325,7 @@ class PrototypePipeline:
         self.node_output_states.pop(node_id, None)
         self.node_execution_states.pop(node_id, None)
         self.node_execution_messages.pop(node_id, None)
+        self.completed_node_ids.discard(node_id)
         for tunnel_name in removed_tunnels:
             self.output_tunnels.pop(_tunnel_key(tunnel_name), None)
         self.connections = [
@@ -5332,6 +5334,7 @@ class PrototypePipeline:
             if connection.source_id != node_id and connection.target_id != node_id
             and connection.tunnel_name not in removed_tunnels
         ]
+        self.clear_execution_errors()
         return True
 
     def connect(
@@ -5499,6 +5502,7 @@ class PrototypePipeline:
                 for connection in self.connections
                 if connection not in removed
             ]
+            self.clear_execution_errors()
         return removed
 
     def connect_to_tunnel(
@@ -5588,7 +5592,10 @@ class PrototypePipeline:
                 )
             )
         ]
-        return len(self.connections) != before
+        changed = len(self.connections) != before
+        if changed:
+            self.clear_execution_errors()
+        return changed
 
     def trim_invalid_connections(self, node_id: str) -> tuple[GraphConnection, ...]:
         node = self.nodes.get(node_id)
@@ -5606,6 +5613,7 @@ class PrototypePipeline:
                 for connection in self.connections
                 if connection not in removed
             ]
+            self.clear_execution_errors()
         return removed
 
     def trim_invalid_output_connections(
@@ -5646,6 +5654,7 @@ class PrototypePipeline:
                 for connection in self.connections
                 if connection not in removed
             ]
+            self.clear_execution_errors()
         return removed
 
     def set_param(self, node_id: str, name: str, value: Any) -> None:
@@ -6197,6 +6206,19 @@ class PrototypePipeline:
         self.node_execution_states[node_id] = EXECUTION_ERROR
         self.node_execution_messages[node_id] = str(message)
 
+    def clear_execution_errors(self) -> set[str]:
+        """Reset every obsolete execution error without dropping cached output."""
+        error_node_ids = {
+            node_id
+            for node_id, state in self.node_execution_states.items()
+            if node_id in self.nodes and state == EXECUTION_ERROR
+        }
+        for node_id in error_node_ids:
+            self.node_execution_states[node_id] = EXECUTION_NOT_CALCULATED
+            self.node_execution_messages[node_id] = ""
+            self.completed_node_ids.discard(node_id)
+        return error_node_ids
+
     def mark_manual_descendants_stale(self, node_ids: Iterable[str]) -> set[str]:
         """Mark stale manual barriers and their waiting descendants."""
         affected = self.descendants_inclusive(node_ids)
@@ -6582,6 +6604,7 @@ class PrototypePipeline:
         target_node_ids: Iterable[str] | None = None,
         retain_node_ids: Iterable[str] | None = None,
         prune_unretained: bool = False,
+        continue_independent_branches: bool = False,
     ) -> dict[str, Any]:
         retained_nodes = {
             node_id for node_id in (retain_node_ids or ()) if node_id in self.nodes
@@ -6707,9 +6730,24 @@ class PrototypePipeline:
                         progress_callback,
                         cancel_callback,
                     )
+                except OperationCancelled:
+                    raise
                 except Exception as exc:
                     self.set_node_execution_error(node_id, str(exc))
-                    raise
+                    if not continue_independent_branches:
+                        raise
+                    failed_branch = (
+                        self.descendants_inclusive({node_id}) & remaining
+                    )
+                    remaining.difference_update(failed_branch)
+                    self.mark_nodes_blocked(
+                        failed_branch - {node_id},
+                        message=(
+                            f"Blocked because upstream node "
+                            f"'{self.nodes[node_id].title}' failed: {exc}"
+                        ),
+                    )
+                    continue
                 self.node_outputs[node_id] = [data for data, _ in results]
                 self.node_output_states[node_id] = [state for _, state in results]
                 primary_output, primary_state = results[0]
@@ -6901,6 +6939,8 @@ class PrototypePipeline:
             payload = source_payloads.get(node_id)
             if payload is None:
                 payload = SourcePayload(input_data, input_metadata, input_name)
+            if payload.error:
+                raise ValueError(payload.error)
             state = payload.image_state
             if state is None or state.value_range == DEFERRED_VALUE_RANGE:
                 state = image_state_from_array(
