@@ -271,7 +271,10 @@ def test_assign_channel_names_propagates_through_split_channels():
         "ch1",
         "CTBP2",
     ]
-    assert [state.channels[0].name for state in pipeline.node_output_states[split.id]] == [
+    assert [
+        state.channels[0].name
+        for state in pipeline.node_output_states[split.id]
+    ] == [
         "ch1",
         "CTBP2",
     ]
